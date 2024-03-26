@@ -5,10 +5,12 @@ import (
 	"encoding/json"
 	"flag"
 	"github.com/giobart/2dfs-builder/filesystem"
+	"github.com/moby/buildkit/client/llb"
+	"github.com/moby/buildkit/client/llb/imagemetaresolver"
+	ocispecs "github.com/opencontainers/image-spec/specs-go/v1"
 	"log"
 	"os"
-
-	"github.com/moby/buildkit/client/llb"
+	"time"
 )
 
 type buildOpt struct {
@@ -86,6 +88,15 @@ func GenLLB(baseImage string, fs TwoDFsFile, constraints *llb.Constraints) llb.S
 	base := llb.Image(baseImage)
 	field := filesystem.GetField()
 
+	_, _, dt, err := imagemetaresolver.Default().ResolveImageConfig(context.Background(), baseImage, llb.ResolveImageConfigOpt{})
+	if err != nil {
+		log.Fatal(err)
+	}
+	var img ocispecs.Image
+	if err := json.Unmarshal(dt, &img); err != nil {
+		log.Fatal(err)
+	}
+
 	for _, allotment := range fs.Entry {
 
 		// Generating allotment option to add 2dfs description to oci layer
@@ -93,11 +104,14 @@ func GenLLB(baseImage string, fs TwoDFsFile, constraints *llb.Constraints) llb.S
 		allotmentOpt := llb.WithDescription(map[string]string{"2dfs-allotment": string(allotmentToString)})
 
 		// Generating layer for this allotment and saving the state
-		fileaction := llb.Copy(llb.Scratch(), allotment.Src, allotment.Dst) //, allotmentOpt)
-		allotmentLayer := llb.Merge([]llb.State{base, llb.Scratch().File(fileaction, allotmentOpt)}).Output()
+		fileaction := llb.Copy(llb.Local("context"), allotment.Src, allotment.Dst)
+		allotmentstate := llb.Merge([]llb.State{base, llb.Scratch().File(fileaction, allotmentOpt)})
+		if err != nil {
+			log.Fatal(err)
+		}
+		allotmentLayer := allotmentstate.Output()
 		newstate := base.WithOutput(allotmentLayer)
 		states = append(states, newstate)
-
 		//storing layer digest as part of allotment information
 		digest, err := allotmentLayer.ToInput(context.Background(), constraints)
 		if err != nil {
@@ -110,7 +124,25 @@ func GenLLB(baseImage string, fs TwoDFsFile, constraints *llb.Constraints) llb.S
 		})
 	}
 
-	// Merging layers and marshalling filesystem as layer description
+	// Merging layers and marshalling filesystem as layer config in a new image
 	twodfsOpt := llb.WithDescription(map[string]string{"2dfs-field": field.Marshal()})
-	return base.WithOutput(llb.Merge(states, twodfsOpt).Output())
+	finalState := base.WithOutput(llb.Merge(states, twodfsOpt).Output())
+	currentTime := time.Now()
+	commitToHistory(&img, "2dfs-field", field.Marshal(), true, &currentTime)
+	if err != nil {
+		log.Fatal(err)
+	}
+	log.Printf("%v", img)
+	imageConfig, err := json.Marshal(img)
+	twodfsImage, err := finalState.WithImageConfig(imageConfig)
+	return twodfsImage
+}
+
+func commitToHistory(img *ocispecs.Image, by string, comment string, withLayer bool, tm *time.Time) {
+	img.History = append(img.History, ocispecs.History{
+		CreatedBy:  by,
+		Comment:    comment,
+		EmptyLayer: !withLayer,
+		Created:    tm,
+	})
 }

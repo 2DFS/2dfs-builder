@@ -1,9 +1,11 @@
 package filesystem
 
 type Allotment struct {
-	Row    int    `json:"row"`
-	Col    int    `json:"col"`
-	Digest string `json:"digest"`
+	Row      int    `json:"row"`
+	Col      int    `json:"col"`
+	Digest   string `json:"digest"`
+	FileName string `json:"filename"`
+	CacheKey string `json:"cachekey"`
 }
 
 type Cols struct {
@@ -14,6 +16,7 @@ type Cols struct {
 type TwoDFilesystem struct {
 	Rows    []Cols `json:"rows"`
 	TotRows int    `json:"rows_size"`
+	Owner   string `json:"owner"`
 }
 
 type Field interface {

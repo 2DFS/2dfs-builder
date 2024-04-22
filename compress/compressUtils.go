@@ -11,14 +11,14 @@ import (
 	"strings"
 )
 
-// GenBlobrFromPath generates an oci tar+gz from a given folder, and stores the result to toDir location
-// it returns the blob digest, which is the filename, or an error
-func GenBlobFromPath(fromPath string, toDir string) (string, error) {
+// GenBlobrFromPath generates an oci tar+gz from a given folder, returns the path of the generated file
+func CompressFolder(fromPath string) (string, error) {
 
 	tmpfilename := sha256.Sum256([]byte(fromPath))
+	tmpdir := os.TempDir()
 
 	// Open the output file for writing in gzip format
-	outFile, err := os.CreateTemp(toDir, fmt.Sprintf("%x", tmpfilename))
+	outFile, err := os.CreateTemp(tmpdir, fmt.Sprintf("%x", tmpfilename))
 	if err != nil {
 		return "", err
 	}
@@ -98,25 +98,73 @@ func GenBlobFromPath(fromPath string, toDir string) (string, error) {
 		return "", fmt.Errorf("failed flushing gzip file: %w", err)
 	}
 
-	// Calculate the sha256 digest of the file
-	digest := calculateSha256Digest(outFile)
-	if digest == "" {
-		return "", fmt.Errorf("failed calculating sha256 digest")
-	}
-
-	// Copy the file to the final destination
-	err = copyFile(outFile, filepath.Join(toDir, digest))
-	if err != nil {
-		return "", fmt.Errorf("failed copying tmp file to destination: %w", err)
-	}
-
-	// Remove tmp file
-	_ = os.Remove(outFile.Name())
-
-	return digest, nil
+	return outFile.Name(), nil
 }
 
-func calculateSha256Digest(outFile *os.File) string {
+func DecompressFolder(targzFilePath string, outputDirectory string) error {
+
+	// Open given tar file
+	targzfile, err := os.Open(targzFilePath)
+	if err != nil {
+		return err
+	}
+
+	// Open gz reader
+	gzipReader, err := gzip.NewReader(targzfile)
+	if err != nil {
+		return err
+	}
+	defer gzipReader.Close()
+
+	// Create a new tar archive reader
+	tarReader := tar.NewReader(gzipReader)
+
+	// Walk through the tar archive
+	for {
+		header, err := tarReader.Next()
+
+		switch {
+
+		// if no more files are found return
+		case err == io.EOF:
+			return nil
+
+		// return any other error
+		case err != nil:
+			return err
+
+		// if the header is nil, just skip it
+		case header == nil:
+			continue
+		}
+
+		target := filepath.Join(outputDirectory, header.Name)
+
+		switch header.Typeflag {
+
+		// if its a dir and it doesn't exist create it
+		case tar.TypeDir:
+			if _, err := os.Stat(target); err != nil {
+				if err := os.MkdirAll(target, 0755); err != nil {
+					return err
+				}
+			}
+
+		// if it's a file create it
+		case tar.TypeReg:
+			f, err := os.OpenFile(target, os.O_CREATE|os.O_RDWR, os.FileMode(header.Mode))
+			if err != nil {
+				return err
+			}
+			if _, err := io.Copy(f, tarReader); err != nil {
+				return err
+			}
+			f.Close()
+		}
+	}
+}
+
+func CalculateSha256Digest(outFile *os.File) string {
 	allbytes := make([]byte, 0)
 	buffer := make([]byte, 500)
 
@@ -135,21 +183,14 @@ func calculateSha256Digest(outFile *os.File) string {
 	return fmt.Sprintf("%x", digest)
 }
 
-func copyFile(src *os.File, dst string) error {
-
-	// Create destination file
-	destinationFile, err := os.Create(dst)
-	if err != nil {
-		return err
-	}
-	defer destinationFile.Close()
+func CopyFile(src *os.File, dst *os.File) error {
 
 	// Copy content from source file to destination file
 	buffer := make([]byte, 500)
 	src.Seek(0, 0)
 	for {
 		n, err := src.Read(buffer)
-		destinationFile.Write(buffer[:n])
+		dst.Write(buffer[:n])
 		if err != nil {
 			break
 		}

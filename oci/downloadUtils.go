@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strings"
 	"time"
 
 	v1 "github.com/opencontainers/image-spec/specs-go/v1"
@@ -24,12 +25,19 @@ type tokenResponse struct {
 
 func DownloadIndex(image OciImageLink) (v1.Index, error) {
 
-	token, err := getToken(image)
-	if err != nil {
-		return v1.Index{}, err
-	}
+	var bearer = ""
 
-	var bearer = "Bearer " + token
+	// Authenticate only if registryAuth and service are provided
+	if image.registryAuth != "" && image.service != "" {
+
+		token, err := getToken(image)
+		if err != nil {
+			return v1.Index{}, err
+		}
+
+		bearer = "Bearer " + token
+
+	}
 
 	// Get Manifest at https://{registry}/v2/{repository}/manifests/{tag}
 	indexRequest, err := http.NewRequest("GET", fmt.Sprintf("https://%s/v2/%s/manifests/%s", image.Registry, image.Repository, image.Tag), nil)
@@ -46,12 +54,24 @@ func DownloadIndex(image OciImageLink) (v1.Index, error) {
 
 	client := http.DefaultClient
 	indexResult, err := client.Do(indexRequest)
-	if err != nil {
-		return v1.Index{}, err
-	}
 
+	// If the request is unauthorized, try to get a token and retry
+	// This works only if bearer was empty, thus auth was not attempted
+	if indexResult.StatusCode == http.StatusUnauthorized || indexResult.StatusCode == 403 && bearer == "" {
+		authHeader := indexResult.Header[http.CanonicalHeaderKey("WWW-Authenticate")]
+		if len(authHeader) == 0 {
+			return v1.Index{}, fmt.Errorf("error getting index: %d", indexResult.StatusCode)
+		}
+		realm, service := parseWWWAuthenticate(authHeader)
+		image.service = service
+		image.registryAuth = realm
+		return DownloadIndex(image)
+	}
 	if indexResult.StatusCode != http.StatusOK {
 		return v1.Index{}, fmt.Errorf("error getting index: %d", indexResult.StatusCode)
+	}
+	if err != nil {
+		return v1.Index{}, err
 	}
 
 	responseBuffer := make([]byte, 1024)
@@ -70,13 +90,17 @@ func DownloadIndex(image OciImageLink) (v1.Index, error) {
 		return v1.Index{}, err
 	}
 
+	if index.MediaType != v1.MediaTypeImageIndex {
+		return v1.Index{}, fmt.Errorf("invalid index media type: %s", index.MediaType)
+	}
+
 	return index, nil
 }
 
 func getToken(image OciImageLink) (string, error) {
 
 	// Get Token at https://{registry}/token\?service\=\{registry}\&scope\="repository:{repository}:pull"
-	tokenRequest, err := http.NewRequest("GET", fmt.Sprintf("https://%s/token?service=%s&scope=repository:%s:pull", image.registryAuth, image.service, image.Repository), nil)
+	tokenRequest, err := http.NewRequest("GET", fmt.Sprintf("%s?service=%s&scope=repository:%s:pull", image.registryAuth, image.service, image.Repository), nil)
 	if err != nil {
 		return "", err
 	}
@@ -113,4 +137,31 @@ func getToken(image OciImageLink) (string, error) {
 	}
 
 	return token.Token, nil
+}
+
+// Get the realm and service from the WWW-Authenticate header (realm,service)
+func parseWWWAuthenticate(authHeader []string) (string, string) {
+
+	// Split the header into key-value pairs
+	pairs := strings.Split(strings.TrimPrefix(authHeader[0], "Bearer "), ",")
+
+	// Parse the key-value pairs
+	var service, realm string
+	for _, pair := range pairs {
+		// Split the pair into key and value
+		kv := strings.Split(pair, "=")
+		if len(kv) != 2 {
+			continue
+		}
+		key := strings.TrimSpace(kv[0])
+		value := strings.Trim(kv[1], "\"")
+		switch key {
+		case "service":
+			service = value
+		case "realm":
+			realm = value
+		}
+	}
+
+	return realm, service
 }

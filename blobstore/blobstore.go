@@ -3,6 +3,7 @@ package blobstore
 import (
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 )
@@ -12,16 +13,17 @@ type blobstore struct {
 }
 
 type BlobStore interface {
-	// GetBlob returns the blob file pointer. Error if it not exists
+	// GetBlob returns the blob fully qualified file name. Error if it not exists
 	GetBlob(digest string) (string, error)
 	// Downloads the blob from the store
 	DownloadBlob(ctx context.Context, digest string, store string) error
-	// UploadBlob generates the empty blob file for a given digest and returns its path. The pointer MUST be used to write the blob content.
+	// UploadBlob generates the empty blob file for a given digest and returns its path.
 	UploadBlob(digest string) (string, error)
 }
 
 func NewBlobStore(path string) (*blobstore, error) {
 	storedir, err := os.Open(path)
+	defer storedir.Close()
 	if err != nil {
 		return nil, err
 	}
@@ -37,14 +39,13 @@ func NewBlobStore(path string) (*blobstore, error) {
 	}, nil
 }
 
-func (b *blobstore) GetBlob(digest string) (string, error) {
+func (b *blobstore) GetBlob(digest string) (io.ReadCloser, error) {
 	dest := filepath.Join(b.path, digest)
 	openBlob, err := os.Open(dest)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
-	defer openBlob.Close()
-	return openBlob.Name(), nil
+	return openBlob, nil
 }
 
 func (b *blobstore) DownloadBlob(ctx context.Context, digest string, store string) error {
@@ -53,12 +54,12 @@ func (b *blobstore) DownloadBlob(ctx context.Context, digest string, store strin
 	return nil
 }
 
-func (b *blobstore) UploadBlob(digest string) (string, error) {
+func (b *blobstore) UploadBlob(digest string) (io.WriteCloser, error) {
 	dest := filepath.Join(b.path, digest)
 	blobfile, err := os.Create(dest)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 	defer blobfile.Close()
-	return blobfile.Name(), nil
+	return blobfile, nil
 }

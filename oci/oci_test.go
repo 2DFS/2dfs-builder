@@ -26,7 +26,7 @@ func TestToken(t *testing.T) {
 func TestDownloadIndexDocker(t *testing.T) {
 
 	link := OciImageLink{
-		Registry:   "index.docker.io",
+		Registry:   "docker.io",
 		Repository: "library/nginx",
 		Tag:        "latest",
 	}

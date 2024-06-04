@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"strings"
 	"time"
@@ -74,27 +75,31 @@ func DownloadIndex(image OciImageLink) (v1.Index, error) {
 		return v1.Index{}, err
 	}
 
-	responseBuffer := make([]byte, 1024)
-	fullResponse := []byte{}
-	for {
-		n, err := indexResult.Body.Read(responseBuffer)
-		fullResponse = append(fullResponse, responseBuffer[:n]...)
-		if err != nil {
-			break
-		}
-	}
-	index := v1.Index{}
-
-	err = json.Unmarshal(fullResponse, &index)
-	if err != nil {
-		return v1.Index{}, err
-	}
-
+	index, err := ReadIndex(indexResult.Body)
 	if index.MediaType != v1.MediaTypeImageIndex {
 		return v1.Index{}, fmt.Errorf("invalid index media type: %s", index.MediaType)
 	}
 
 	return index, nil
+}
+
+func ReadIndex(indexReader io.ReadCloser) (v1.Index, error) {
+	buffer := make([]byte, 1024)
+	fullread := []byte{}
+	for {
+		n, err := indexReader.Read(buffer)
+		fullread = append(fullread, buffer[:n]...)
+		if err != nil {
+			break
+		}
+	}
+
+	indexStruct := v1.Index{}
+	err := json.Unmarshal(fullread, &indexStruct)
+	if err != nil {
+		return v1.Index{}, err
+	}
+	return indexStruct, nil
 }
 
 func getToken(image OciImageLink) (string, error) {

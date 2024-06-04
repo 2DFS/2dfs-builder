@@ -5,6 +5,8 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+
+	"github.com/giobart/2dfs-builder/compress"
 )
 
 type cachestore struct {
@@ -18,6 +20,8 @@ type CacheStore interface {
 	Add(digest string) (io.WriteCloser, error)
 	// Del removes the entry from the store
 	Del(digest string)
+	// Check integrity based on digest
+	Check(digest string) bool
 }
 
 func NewCacheStore(path string) (CacheStore, error) {
@@ -60,4 +64,17 @@ func (b *cachestore) Add(digest string) (io.WriteCloser, error) {
 func (b *cachestore) Del(digest string) {
 	dest := filepath.Join(b.path, digest)
 	os.Remove(dest)
+}
+
+func (b *cachestore) Check(digest string) bool {
+	dest := filepath.Join(b.path, digest)
+	file, err := os.Open(dest)
+	if err != nil {
+		return false
+	}
+	calculatedDigest := compress.CalculateSha256Digest(file)
+	if calculatedDigest != digest {
+		return false
+	}
+	return true
 }

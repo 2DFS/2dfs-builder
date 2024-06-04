@@ -2,6 +2,7 @@ package oci
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -23,6 +24,8 @@ const (
 	IndexStoreContextKey = "indexStore"
 	// BlobStoreContextKey is the context key for the blob store
 	BlobStoreContextKey = "blobStore"
+	// 2dfs media type
+	TwoDfsMediaType = "application/vnd.oci.image.layer.v1.2dfs.field"
 )
 
 type containerImage struct {
@@ -30,6 +33,7 @@ type containerImage struct {
 	registry   string
 	repository string
 	tag        string
+	url        string
 	indexCache cache.CacheStore
 	blobCache  cache.CacheStore
 	manifests  []v1.Manifest
@@ -39,7 +43,7 @@ type Image interface {
 	AddField(fs filesystem.Field) error
 }
 
-func NewImage(url string, ctx context.Context) (Image, error) {
+func NewImage(ctx context.Context, url string, forcepull bool) (Image, error) {
 
 	ctxIndexPosition := ctx.Value(IndexStoreContextKey)
 	indexStoreLocation := ""
@@ -139,6 +143,7 @@ func (c *containerImage) loadIndex(url string, ctx context.Context) error {
 	c.registry = registry
 	c.repository = repo
 	c.tag = tag
+	c.url = url
 
 	// save index to cache
 	uploadWriter, err := c.indexCache.Add(url)
@@ -160,6 +165,68 @@ func (c *containerImage) loadIndex(url string, ctx context.Context) error {
 }
 
 func (c *containerImage) AddField(fs filesystem.Field) error {
+	marshalledFs := []byte(fs.Marshal())
+	fsDigest := fmt.Sprintf("%x", sha256.Sum256(marshalledFs))
+
+	// if new fs, write it to cache
+	if _, err := c.blobCache.Get(fsDigest); err != nil {
+		fsWriter, err := c.blobCache.Add(fsDigest)
+		if err != nil {
+			return err
+		}
+		_, err = fsWriter.Write(marshalledFs)
+		if err != nil {
+			return err
+		}
+		defer fsWriter.Close()
+	}
+
+	for i, manifest := range c.manifests {
+		// update manifest with new layer
+		c.manifests[i].Layers = append(manifest.Layers, v1.Descriptor{
+			MediaType: TwoDfsMediaType,
+			Digest:    digest.Digest(fmt.Sprintf("sha256:%s", fsDigest)),
+			Size:      int64(len(marshalledFs)),
+		})
+	}
+
+	// re-compute manifest digests and update index and caches
+	for i, _ := range c.index.Manifests {
+		marshalledManifest, err := json.Marshal(c.manifests[i])
+		if err != nil {
+			return err
+		}
+		manifestDigest := fmt.Sprintf("%x", sha256.Sum256(marshalledManifest))
+		// update manifest cache
+		if _, err := c.blobCache.Get(manifestDigest); err != nil {
+			manifestWriter, err := c.blobCache.Add(manifestDigest)
+			if err != nil {
+				return err
+			}
+			_, err = manifestWriter.Write(marshalledManifest)
+			if err != nil {
+				manifestWriter.Close()
+				return err
+			}
+			manifestWriter.Close()
+		}
+		c.index.Manifests[i].Digest = digest.Digest(fmt.Sprintf("sha256:%s", manifestDigest))
+	}
+
+	// update index cache
+	indexBytes, err := json.Marshal(c.index)
+	if err != nil {
+		return err
+	}
+	c.indexCache.Del(c.url)
+	indexWriter, err := c.indexCache.Add(c.url)
+	if err != nil {
+		return err
+	}
+	_, err = indexWriter.Write(indexBytes)
+	if err != nil {
+		return err
+	}
 	return nil
 }
 

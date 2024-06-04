@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/opencontainers/go-digest"
 	v1 "github.com/opencontainers/image-spec/specs-go/v1"
 )
 
@@ -27,6 +28,9 @@ type tokenResponse struct {
 func DownloadIndex(image OciImageLink) (v1.Index, error) {
 
 	var bearer = ""
+	if image.Registry == "docker.io" {
+		image.Registry = "index.docker.io"
+	}
 
 	// Authenticate only if registryAuth and service are provided
 	if image.registryAuth != "" && image.service != "" {
@@ -169,4 +173,10 @@ func parseWWWAuthenticate(authHeader []string) (string, string) {
 	}
 
 	return realm, service
+}
+
+func DownloadBlob(image OciImageLink, digest digest.Digest) (io.ReadCloser, error) {
+
+	//TODO: Implement this function
+	return nil, fmt.Errorf("not implemented")
 }

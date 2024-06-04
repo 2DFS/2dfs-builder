@@ -7,7 +7,10 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/giobart/2dfs-builder/blobstore"
+	"log"
+
+	"github.com/giobart/2dfs-builder/cache"
+	"github.com/giobart/2dfs-builder/filesystem"
 	v1 "github.com/opencontainers/image-spec/specs-go/v1"
 )
 
@@ -16,49 +19,81 @@ const (
 	DefaultRegistry = "index.docker.io"
 	// IndexStoreContextKey is the context key for the index store
 	IndexStoreContextKey = "indexStore"
+	// BlobStoreContextKey is the context key for the blob store
+	BlobStoreContextKey = "blobStore"
 )
 
-type ContainerImage struct {
-	path  string
-	index v1.Index
+type containerImage struct {
+	index      v1.Index
+	registry   string
+	repository string
+	tag        string
+	indexCache cache.CacheStore
+	blobCache  cache.CacheStore
+	manifests  []v1.Manifest
 }
 
-func NewContainerImage(url string, ctx context.Context) (*ContainerImage, error) {
-	index, err := LoadIndex(url, ctx)
+type Image interface {
+	AddField(fs filesystem.Field) error
+}
+
+func NewImage(url string, ctx context.Context) (Image, error) {
+
+	ctxIndexPosition := ctx.Value(IndexStoreContextKey)
+	indexStoreLocation := ""
+	if ctxIndexPosition != nil {
+		indexStoreLocation = ctxIndexPosition.(string)
+	} else {
+		return nil, fmt.Errorf("Index store location not found in context")
+	}
+
+	ctxBlobPosition := ctx.Value(BlobStoreContextKey)
+	blobStoreLocation := ""
+	if ctxBlobPosition != nil {
+		blobStoreLocation = ctxBlobPosition.(string)
+	} else {
+		return nil, fmt.Errorf("Blob store location not found in context")
+	}
+
+	imgstore, err := cache.NewCacheStore(indexStoreLocation)
 	if err != nil {
 		return nil, err
 	}
-	return &ContainerImage{
-		index: index,
-	}, nil
+	blobstore, err := cache.NewCacheStore(blobStoreLocation)
+	if err != nil {
+		return nil, err
+	}
+
+	img := &containerImage{
+		indexCache: imgstore,
+		blobCache:  blobstore,
+	}
+
+	err = img.loadIndex(url, ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	return img, nil
+
 }
 
-func LoadIndex(url string, ctx context.Context) (v1.Index, error) {
+func (c *containerImage) loadIndex(url string, ctx context.Context) error {
 	// if path is an URL use Distribution spec to download image index
 	// if path is a local file use fsutil.ReadFile
 
-	ctxPosition := ctx.Value(IndexStoreContextKey)
-	storeLocation := ""
-	if ctxPosition != nil {
-		storeLocation = ctxPosition.(string)
-	} else {
-		return v1.Index{}, fmt.Errorf("Index store location not found in context")
-	}
-
 	//check index local cache first
-	imgstore, err := blobstore.NewBlobStore(storeLocation)
-	if err != nil {
-		return v1.Index{}, err
-	}
-	indexReader, err := imgstore.GetBlob(url)
+
+	indexReader, err := c.indexCache.Get(url)
 	if err == nil {
 		// load index from cache
 		defer indexReader.Close()
 		index, err := ReadIndex(indexReader)
 		if err != nil {
-			return v1.Index{}, err
+			return err
 		}
-		return index, nil
+		c.index = index
+		return nil
 	}
 
 	// download image online
@@ -83,21 +118,58 @@ func LoadIndex(url string, ctx context.Context) (v1.Index, error) {
 		Repository: repo,
 		Tag:        tag,
 	})
+	if err != nil {
+		return err
+	}
+	c.registry = registry
+	c.repository = repo
+	c.tag = tag
 
 	// save index to cache
-	uploadWriter, err := imgstore.UploadBlob(url)
+	uploadWriter, err := c.indexCache.Add(url)
 	if err != nil {
-		return v1.Index{}, err
+		return err
 	}
 	defer uploadWriter.Close()
 	indexBytes, err := json.Marshal(index)
 	if err != nil {
-		return v1.Index{}, err
+		return err
 	}
 	_, err = uploadWriter.Write(indexBytes)
 	if err != nil {
-		return v1.Index{}, err
+		return err
 	}
 
-	return index, nil
+	c.index = index
+	return nil
+}
+
+func (c *containerImage) AddField(fs filesystem.Field) error {
+	return nil
+}
+
+func (c *containerImage) downloadBlobs() error {
+	for _, manifest := range c.index.Manifests {
+		// check if blob cached
+		_, err := c.blobCache.Get(manifest.Digest.String())
+		if err == nil {
+			// blob already cached, continue
+			log.Printf("%s [CACHED]", manifest.Digest.String())
+			continue
+		}
+
+		log.Printf("%s [DOWNLOADING]", manifest.Digest.String())
+		// download blob
+		_, err = DownloadBlob(
+			OciImageLink{
+				Registry:   c.registry,
+				Repository: c.repository,
+				Tag:        c.tag,
+			},
+			manifest.Digest,
+		)
+		// TODO: continue here download procedure
+
+	}
+	return nil
 }

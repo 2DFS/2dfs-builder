@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 
@@ -41,6 +43,7 @@ type containerImage struct {
 
 type Image interface {
 	AddField(fs filesystem.Field) error
+	GetExporter() FieldExporter
 }
 
 func NewImage(ctx context.Context, url string, forcepull bool) (Image, error) {
@@ -164,7 +167,13 @@ func (c *containerImage) loadIndex(url string, ctx context.Context) error {
 	return nil
 }
 
-func (c *containerImage) AddField(fs filesystem.Field) error {
+func (c *containerImage) AddField(manifest filesystem.TwoDFsManifest) error {
+
+	fs, err := c.buildFiled(manifest)
+	if err != nil {
+		return err
+	}
+
 	marshalledFs := []byte(fs.Marshal())
 	fsDigest := fmt.Sprintf("%x", sha256.Sum256(marshalledFs))
 
@@ -334,4 +343,54 @@ func (c *containerImage) downloadAndCache(downloadDigest digest.Digest) error {
 	}
 
 	return nil
+}
+
+func (c *containerImage) GetExporter() FieldExporter {
+	return c
+}
+
+func (c *containerImage) buildFiled(manifest filesystem.TwoDFsManifest) (filesystem.Field, error) {
+
+	tmpFolder := filepath.Join(os.TempDir(), c.repository, c.tag, "field")
+	if _, err := os.Stat(tmpFolder); err == nil {
+		os.RemoveAll(tmpFolder)
+	}
+	os.Mkdir(tmpFolder, 0755)
+	defer os.RemoveAll(tmpFolder)
+
+	//empty Field
+	f := filesystem.GetField()
+
+	for _, a := range manifest.Allotments {
+		//create allotment folder
+		allotmentFolder := filepath.Join(tmpFolder, fmt.Sprintf("r%d-c%d", a.Row, a.Col))
+		os.Mkdir(allotmentFolder, 0755)
+		//create nasted dirs
+		//TODO Continue here
+
+		//add allotments
+		f.AddAllotment(filesystem.Allotment{
+			Row:      a.Row,
+			Col:      a.Col,
+			Digest:   "",
+			FileName: a.Dst,
+		})
+
+	}
+
+	//check allotments values
+	for r := 0; r <= row; r++ {
+		for i := 0; i <= n; i++ {
+
+			expecteddigest := fmt.Sprintf("r%d-c%d", r, i)
+			actual := f.(*filesystem.TwoDFilesystem).Rows[r].Allotments[i]
+			if expecteddigest != actual.Digest || r != actual.Row || i != actual.Col {
+				return nil, fmt.Errorf("expected allotment digest %s, actual allotment %v", expecteddigest, actual)
+			}
+
+		}
+	}
+	checkAllotments(row, n, f)
+
+	return f, nil
 }

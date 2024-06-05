@@ -176,7 +176,75 @@ func parseWWWAuthenticate(authHeader []string) (string, string) {
 }
 
 func DownloadBlob(image OciImageLink, digest digest.Digest) (io.ReadCloser, error) {
+	var bearer = ""
 
-	//TODO: Implement this function
-	return nil, fmt.Errorf("not implemented")
+	if image.Registry == "docker.io" {
+		image.Registry = "index.docker.io"
+	}
+
+	// Authenticate only if registryAuth and service are provided
+	if image.registryAuth != "" && image.service != "" {
+		token, err := getToken(image)
+		if err != nil {
+			return nil, err
+		}
+		bearer = "Bearer " + token
+	}
+
+	// Get Manifest at https://{registry}/v2/{repository}/manifests/{tag}
+	blobRequest, err := http.NewRequest("GET", fmt.Sprintf("https://%s/v2/%s/blobs/%s", image.Registry, image.Repository, digest.String()), nil)
+	if err != nil {
+		return nil, err
+	}
+
+	blobRequest.Header.Add("Authorization", bearer)
+
+	ctx, cancel := context.WithTimeout(blobRequest.Context(), 30*time.Second)
+	defer cancel()
+
+	blobRequest = blobRequest.WithContext(ctx)
+
+	client := http.DefaultClient
+	blobResult, err := client.Do(blobRequest)
+
+	// If the request is unauthorized, try to get a token and retry
+	// This works only if bearer was empty, thus auth was not attempted
+	if blobResult.StatusCode == http.StatusUnauthorized || blobResult.StatusCode == 403 && bearer == "" {
+		authHeader := blobResult.Header[http.CanonicalHeaderKey("WWW-Authenticate")]
+		if len(authHeader) == 0 {
+			return nil, fmt.Errorf("error getting blob: %d", blobResult.StatusCode)
+		}
+		realm, service := parseWWWAuthenticate(authHeader)
+		image.service = service
+		image.Registry = service
+		image.registryAuth = realm
+		return DownloadBlob(image, digest)
+	}
+	if blobResult.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("error getting blob: %d", blobResult.StatusCode)
+	}
+	if err != nil {
+		return nil, err
+	}
+
+	return blobResult.Body, nil
+}
+
+func ReadManifest(manifestReader io.ReadCloser) (v1.Manifest, error) {
+	buffer := make([]byte, 1024)
+	fullread := []byte{}
+	for {
+		n, err := manifestReader.Read(buffer)
+		fullread = append(fullread, buffer[:n]...)
+		if err != nil {
+			break
+		}
+	}
+
+	manifestStruct := v1.Manifest{}
+	err := json.Unmarshal(fullread, &manifestStruct)
+	if err != nil {
+		return v1.Manifest{}, err
+	}
+	return manifestStruct, nil
 }

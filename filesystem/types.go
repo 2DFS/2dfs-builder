@@ -5,7 +5,6 @@ type Allotment struct {
 	Col      int    `json:"col"`
 	Digest   string `json:"digest"`
 	FileName string `json:"filename"`
-	CacheKey string `json:"cachekey"`
 }
 
 type Cols struct {
@@ -17,6 +16,17 @@ type TwoDFilesystem struct {
 	Rows    []Cols `json:"rows"`
 	TotRows int    `json:"rows_size"`
 	Owner   string `json:"owner"`
+}
+
+type AllotmentManifest struct {
+	Src string `json:"src"`
+	Dst string `json:"dst"`
+	Row int    `json:"row"`
+	Col int    `json:"col"`
+}
+
+type TwoDFsManifest struct {
+	Allotments []AllotmentManifest `json:"allotments"`
 }
 
 type Field interface {

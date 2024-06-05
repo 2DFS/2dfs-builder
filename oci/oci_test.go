@@ -1,8 +1,11 @@
 package oci
 
 import (
+	"fmt"
 	"strings"
 	"testing"
+
+	v1 "github.com/opencontainers/image-spec/specs-go/v1"
 )
 
 func TestToken(t *testing.T) {
@@ -84,4 +87,42 @@ func TestParseWWWAuth(t *testing.T) {
 		t.Errorf("Invalid service error, expected %s, given %s", "registry.docker.io", service)
 	}
 
+}
+
+func TestDownloadManifest(t *testing.T) {
+
+	link := OciImageLink{
+		Registry:   "docker.io",
+		Repository: "library/nginx",
+		Tag:        "latest",
+	}
+
+	index, err := DownloadIndex(link)
+
+	if err != nil {
+		t.Errorf("DownloadIndex error: %v", err)
+		t.Failed()
+	}
+
+	manifestDigest := index.Manifests[0].Digest
+	fmt.Println("Digest: ", manifestDigest.String())
+	manifestReader, err := DownloadBlob(link, manifestDigest)
+	if err != nil {
+		t.Errorf("DownloadBlob error: %v", err)
+		t.Failed()
+		return
+	}
+	defer manifestReader.Close()
+
+	manifest, err := ReadManifest(manifestReader)
+
+	if err != nil {
+		t.Errorf("ReadManifest error: %v", err)
+		t.Failed()
+	}
+
+	if manifest.MediaType != v1.MediaTypeImageManifest {
+		t.Errorf("Invalid manifest media type: %s", manifest.MediaType)
+		t.Failed()
+	}
 }

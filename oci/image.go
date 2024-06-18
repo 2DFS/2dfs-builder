@@ -14,18 +14,22 @@ import (
 	"log"
 
 	"github.com/giobart/2dfs-builder/cache"
+	compress "github.com/giobart/2dfs-builder/compress"
 	"github.com/giobart/2dfs-builder/filesystem"
 	"github.com/opencontainers/go-digest"
 	v1 "github.com/opencontainers/image-spec/specs-go/v1"
 )
 
+type contextKeyType string
+type ManifestMediaType string
+
 const (
 	// DefaultRegistry is the default registry to use
 	DefaultRegistry = "index.docker.io"
 	// IndexStoreContextKey is the context key for the index store
-	IndexStoreContextKey = "indexStore"
+	IndexStoreContextKey contextKeyType = "indexStore"
 	// BlobStoreContextKey is the context key for the blob store
-	BlobStoreContextKey = "blobStore"
+	BlobStoreContextKey contextKeyType = "blobStore"
 	// 2dfs media type
 	TwoDfsMediaType = "application/vnd.oci.image.layer.v1.2dfs.field"
 )
@@ -42,7 +46,7 @@ type containerImage struct {
 }
 
 type Image interface {
-	AddField(fs filesystem.Field) error
+	AddField(manifest filesystem.TwoDFsManifest, targetImage string) error
 	GetExporter() FieldExporter
 }
 
@@ -105,54 +109,45 @@ func (c *containerImage) loadIndex(url string, ctx context.Context) error {
 	// if path is a local file use fsutil.ReadFile
 
 	//check index local cache first
+	log.Default().Println("Loading image index")
 
 	indexReader, err := c.indexCache.Get(url)
 	if err == nil {
+		log.Default().Printf("%s [CACHED] \n", url)
 		// load index from cache
 		defer indexReader.Close()
 		index, err := ReadIndex(indexReader)
 		if err != nil {
+			// if error reading index, remove it from cache
+			log.Default().Printf("unable to read %s from cache, removing it... try again please \n", url)
+			c.indexCache.Del(url)
 			return err
 		}
 		c.index = index
 		return nil
 	}
 
+	// update container registry, tag and repository
+	c.updateImageInfo(url)
+
+	log.Default().Printf("[DOWNLOADING] %s \n", c.url)
 	// download image online
-	urlParts := strings.SplitN(url, "/", 2)
-	registryRegex := regexp.MustCompile(`\b([a-z]+)\.?\s*(?:\b([a-z]+)\.?\s*)*`)
-	registry := urlParts[0]
-	repo := fmt.Sprintf(urlParts[1])
-	if registryRegex.FindStringIndex(registry) == nil {
-		registry = "index.docker.io"
-		repo = url
-	}
-
-	tagAndRepo := strings.Split(repo, ":")
-	tag := "latest"
-	if len(tagAndRepo) == 2 {
-		tag = tagAndRepo[1]
-		repo = tagAndRepo[0]
-	}
-
 	index, err := DownloadIndex(OciImageLink{
-		Registry:   registry,
-		Repository: repo,
-		Tag:        tag,
+		Registry:   c.registry,
+		Repository: c.repository,
+		Tag:        c.tag,
 	})
 	if err != nil {
 		return err
 	}
-	c.registry = registry
-	c.repository = repo
-	c.tag = tag
-	c.url = url
+	log.Default().Println("Index downloaded")
 
 	// save index to cache
 	uploadWriter, err := c.indexCache.Add(url)
 	if err != nil {
 		return err
 	}
+
 	defer uploadWriter.Close()
 	indexBytes, err := json.Marshal(index)
 	if err != nil {
@@ -162,12 +157,43 @@ func (c *containerImage) loadIndex(url string, ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	log.Default().Println("Index cached")
 
 	c.index = index
 	return nil
 }
 
-func (c *containerImage) AddField(manifest filesystem.TwoDFsManifest) error {
+func (c *containerImage) updateImageInfo(url string) {
+	urlParts := strings.SplitN(url, "/", 2)
+	if len(urlParts) == 1 {
+		c.registry = "docker.io"
+		c.repository = url
+	} else {
+		registryRegex := regexp.MustCompile(`\b([a-z]+)\.?\s*(?:\b([a-z]+)\.?\s*)*`)
+		registry := urlParts[0]
+		c.repository = fmt.Sprintf(urlParts[1])
+		if registryRegex.FindStringIndex(registry) == nil {
+			c.registry = "docker.io"
+		}
+	}
+
+	// add default library repo if not present
+	if strings.Count(c.repository, "/") == 0 {
+		c.repository = "library/" + c.repository
+	}
+
+	//check tag
+	tagAndRepo := strings.Split(c.repository, ":")
+	c.tag = "latest"
+	if len(tagAndRepo) == 2 {
+		c.tag = tagAndRepo[1]
+		c.repository = tagAndRepo[0]
+	}
+
+	c.url = c.registry + "/" + c.repository + ":" + c.tag
+}
+
+func (c *containerImage) AddField(manifest filesystem.TwoDFsManifest, targetUrl string) error {
 
 	fs, err := c.buildFiled(manifest)
 	if err != nil {
@@ -185,6 +211,7 @@ func (c *containerImage) AddField(manifest filesystem.TwoDFsManifest) error {
 		}
 		_, err = fsWriter.Write(marshalledFs)
 		if err != nil {
+			c.blobCache.Del(fsDigest)
 			return err
 		}
 		defer fsWriter.Close()
@@ -227,8 +254,8 @@ func (c *containerImage) AddField(manifest filesystem.TwoDFsManifest) error {
 	if err != nil {
 		return err
 	}
-	c.indexCache.Del(c.url)
-	indexWriter, err := c.indexCache.Add(c.url)
+	c.indexCache.Del(targetUrl)
+	indexWriter, err := c.indexCache.Add(targetUrl)
 	if err != nil {
 		return err
 	}
@@ -236,6 +263,7 @@ func (c *containerImage) AddField(manifest filesystem.TwoDFsManifest) error {
 	if err != nil {
 		return err
 	}
+	c.updateImageInfo(targetUrl)
 	return nil
 }
 
@@ -255,7 +283,7 @@ func (c *containerImage) downloadManifests() error {
 		}
 
 		// download blob
-		c.downloadAndCache(manifest.Digest)
+		c.downloadAndCache(manifest.Digest, v1.MediaTypeImageManifest)
 
 		// read manifest from cache and update container struct
 		manifestCachereader, err := c.blobCache.Get(manifest.Digest.Encoded())
@@ -281,7 +309,7 @@ func (c *containerImage) downloadManifestBlobs(manifest v1.Manifest) error {
 	_, err := c.blobCache.Get(manifest.Config.Digest.Encoded())
 	if err != nil {
 		// blob not cached cached, downloading
-		c.downloadAndCache(manifest.Config.Digest)
+		c.downloadAndCache(manifest.Config.Digest, manifest.Config.MediaType)
 
 	} else {
 		log.Printf("%s [CACHED]", manifest.Config.Digest.Encoded())
@@ -296,9 +324,10 @@ func (c *containerImage) downloadManifestBlobs(manifest v1.Manifest) error {
 		if err != nil {
 			// blob not cached cached, downloading
 			// TODO: this can be parallelized!
-			err := c.downloadAndCache(layer.Digest)
+			err := c.downloadAndCache(layer.Digest, layer.MediaType)
 			if err != nil {
 				log.Printf("Error downloading layer: %v", err)
+				return err
 			}
 		} else {
 			log.Printf("%s [CACHED]", layer.Digest.Encoded())
@@ -307,32 +336,54 @@ func (c *containerImage) downloadManifestBlobs(manifest v1.Manifest) error {
 	return nil
 }
 
-func (c *containerImage) downloadAndCache(downloadDigest digest.Digest) error {
+func (c *containerImage) downloadAndCache(downloadDigest digest.Digest, mediaType string) error {
 	if downloadDigest.Algorithm() != digest.SHA256 {
 		return fmt.Errorf("unsupported digest algorithm: %s", downloadDigest.Algorithm().String())
 	}
 
 	log.Printf("%s [DOWNLOADING]", downloadDigest.Encoded())
-	manifestReader, err := DownloadBlob(
-		OciImageLink{
-			Registry:   c.registry,
-			Repository: c.repository,
-			Tag:        c.tag,
-		},
-		downloadDigest,
-	)
-	if err != nil {
-		return err
+
+	var readCloser io.ReadCloser
+	var err error
+	if mediaType == v1.MediaTypeImageManifest {
+		readCloser, err = DownloadManifest(
+			OciImageLink{
+				Registry:   c.registry,
+				Repository: c.repository,
+				Tag:        c.tag,
+			},
+			downloadDigest.String(),
+		)
+		if err != nil {
+			return err
+		}
+	} else {
+		ctx, cancel := context.WithTimeout(context.Background(), 30)
+		readCloser, err = DownloadBlob(
+			ctx,
+			OciImageLink{
+				Registry:   c.registry,
+				Repository: c.repository,
+				Tag:        c.tag,
+			},
+			downloadDigest,
+			mediaType,
+		)
+		defer cancel()
+		defer readCloser.Close()
+		if err != nil {
+			return err
+		}
 	}
-	defer manifestReader.Close()
 
 	// upload blob to cache store
 	uploadWriter, err := c.blobCache.Add(downloadDigest.Encoded())
 	if err != nil {
 		return err
 	}
-	_, err = io.Copy(uploadWriter, manifestReader)
+	_, err = io.Copy(uploadWriter, readCloser)
 	if err != nil {
+		c.blobCache.Del(downloadDigest.Encoded())
 		return err
 	}
 	defer uploadWriter.Close()
@@ -365,32 +416,86 @@ func (c *containerImage) buildFiled(manifest filesystem.TwoDFsManifest) (filesys
 		//create allotment folder
 		allotmentFolder := filepath.Join(tmpFolder, fmt.Sprintf("r%d-c%d", a.Row, a.Col))
 		os.Mkdir(allotmentFolder, 0755)
-		//create nasted dirs
-		//TODO Continue here
+
+		//create destination file
+		dstPath := a.Dst
+		//check if first characted or dstPath is a slash
+		if dstPath[0] == '/' {
+			dstPath = dstPath[1:]
+		}
+		dst, err := createFileWithDirs(filepath.Join(allotmentFolder, dstPath))
+		if err != nil {
+			return nil, err
+		}
+
+		//open source file
+		src, err := os.Open(a.Src)
+		if err != nil {
+			dst.Close()
+			return nil, err
+		}
+
+		//write allotment content
+		_, err = io.Copy(dst, src)
+		dst.Close()
+		src.Close()
+		if err != nil {
+			return nil, err
+		}
+
+		//compress allotment folder
+		archiveName, err := compress.CompressFolder(allotmentFolder)
+		archive, err := os.Open(archiveName)
+		if err != nil {
+			return nil, err
+		}
+
+		//cache blob
+		digest := compress.CalculateSha256Digest(archive)
+		if !c.blobCache.Check(digest) {
+			blobWriter, err := c.blobCache.Add(digest)
+			if err != nil {
+				archive.Close()
+				return nil, err
+			}
+			_, err = io.Copy(blobWriter, archive)
+			blobWriter.Close()
+			archive.Close()
+			if err != nil {
+				c.blobCache.Del(digest)
+				return nil, err
+			}
+		}
 
 		//add allotments
 		f.AddAllotment(filesystem.Allotment{
 			Row:      a.Row,
 			Col:      a.Col,
-			Digest:   "",
+			Digest:   digest,
 			FileName: a.Dst,
 		})
 
 	}
 
-	//check allotments values
-	for r := 0; r <= row; r++ {
-		for i := 0; i <= n; i++ {
+	return f, nil
+}
 
-			expecteddigest := fmt.Sprintf("r%d-c%d", r, i)
-			actual := f.(*filesystem.TwoDFilesystem).Rows[r].Allotments[i]
-			if expecteddigest != actual.Digest || r != actual.Row || i != actual.Col {
-				return nil, fmt.Errorf("expected allotment digest %s, actual allotment %v", expecteddigest, actual)
-			}
+func createFileWithDirs(p string) (*os.File, error) {
+	// Extract the directory path from the full path
+	dir := filepath.Dir(p)
 
-		}
+	// Create all necessary directories using MkdirAll
+	err := os.MkdirAll(dir, 0755) // Change 0755 to desired permission mode
+	if err != nil {
+		return nil, fmt.Errorf("failed to create directories: %w", err)
 	}
-	checkAllotments(row, n, f)
 
+	// Create the file using os.Create
+	f, err := os.Create(p)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create file: %w", err)
+	}
+
+	fmt.Println("File and directories created successfully!")
 	return f, nil
 }

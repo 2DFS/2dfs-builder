@@ -57,7 +57,6 @@ func (b *cachestore) Add(digest string) (io.WriteCloser, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer blobfile.Close()
 	return blobfile, nil
 }
 

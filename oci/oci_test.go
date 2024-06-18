@@ -106,7 +106,7 @@ func TestDownloadManifest(t *testing.T) {
 
 	manifestDigest := index.Manifests[0].Digest
 	fmt.Println("Digest: ", manifestDigest.String())
-	manifestReader, err := DownloadBlob(link, manifestDigest)
+	manifestReader, err := DownloadManifest(link, manifestDigest.String())
 	if err != nil {
 		t.Errorf("DownloadBlob error: %v", err)
 		t.Failed()

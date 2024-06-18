@@ -29,19 +29,17 @@ func DownloadIndex(image OciImageLink) (v1.Index, error) {
 
 	var bearer = ""
 	if image.Registry == "docker.io" {
-		image.Registry = "index.docker.io"
+		image.Registry = "registry-1.docker.io"
 	}
 
 	// Authenticate only if registryAuth and service are provided
 	if image.registryAuth != "" && image.service != "" {
-
 		token, err := getToken(image)
 		if err != nil {
 			return v1.Index{}, err
 		}
 
 		bearer = "Bearer " + token
-
 	}
 
 	// Get Manifest at https://{registry}/v2/{repository}/manifests/{tag}
@@ -62,12 +60,15 @@ func DownloadIndex(image OciImageLink) (v1.Index, error) {
 
 	// If the request is unauthorized, try to get a token and retry
 	// This works only if bearer was empty, thus auth was not attempted
-	if indexResult.StatusCode == http.StatusUnauthorized || indexResult.StatusCode == 403 && bearer == "" {
+	if indexResult.StatusCode == http.StatusUnauthorized || indexResult.StatusCode == 403 && image.registryAuth == "" {
 		authHeader := indexResult.Header[http.CanonicalHeaderKey("WWW-Authenticate")]
 		if len(authHeader) == 0 {
 			return v1.Index{}, fmt.Errorf("error getting index: %d", indexResult.StatusCode)
 		}
 		realm, service := parseWWWAuthenticate(authHeader)
+		if realm == "" || service == "" {
+			return v1.Index{}, fmt.Errorf("error getting index: %d", indexResult.StatusCode)
+		}
 		image.service = service
 		image.registryAuth = realm
 		return DownloadIndex(image)
@@ -175,11 +176,11 @@ func parseWWWAuthenticate(authHeader []string) (string, string) {
 	return realm, service
 }
 
-func DownloadBlob(image OciImageLink, digest digest.Digest) (io.ReadCloser, error) {
+func DownloadBlob(ctx context.Context, image OciImageLink, digest digest.Digest, mediaType string) (io.ReadCloser, error) {
 	var bearer = ""
 
 	if image.Registry == "docker.io" {
-		image.Registry = "index.docker.io"
+		image.Registry = "registry-1.docker.io"
 	}
 
 	// Authenticate only if registryAuth and service are provided
@@ -198,9 +199,7 @@ func DownloadBlob(image OciImageLink, digest digest.Digest) (io.ReadCloser, erro
 	}
 
 	blobRequest.Header.Add("Authorization", bearer)
-
-	ctx, cancel := context.WithTimeout(blobRequest.Context(), 30*time.Second)
-	defer cancel()
+	blobRequest.Header.Add("Accept", mediaType)
 
 	blobRequest = blobRequest.WithContext(ctx)
 
@@ -209,16 +208,19 @@ func DownloadBlob(image OciImageLink, digest digest.Digest) (io.ReadCloser, erro
 
 	// If the request is unauthorized, try to get a token and retry
 	// This works only if bearer was empty, thus auth was not attempted
-	if blobResult.StatusCode == http.StatusUnauthorized || blobResult.StatusCode == 403 && bearer == "" {
+	if blobResult.StatusCode == http.StatusUnauthorized || blobResult.StatusCode == 403 && image.registryAuth == "" {
 		authHeader := blobResult.Header[http.CanonicalHeaderKey("WWW-Authenticate")]
 		if len(authHeader) == 0 {
 			return nil, fmt.Errorf("error getting blob: %d", blobResult.StatusCode)
 		}
 		realm, service := parseWWWAuthenticate(authHeader)
 		image.service = service
-		image.Registry = service
+		//image.Registry = serice
 		image.registryAuth = realm
-		return DownloadBlob(image, digest)
+		if service == "" {
+			return nil, fmt.Errorf("error getting blob login service: %d", blobResult.StatusCode)
+		}
+		return DownloadBlob(ctx, image, digest, mediaType)
 	}
 	if blobResult.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("error getting blob: %d", blobResult.StatusCode)
@@ -228,6 +230,65 @@ func DownloadBlob(image OciImageLink, digest digest.Digest) (io.ReadCloser, erro
 	}
 
 	return blobResult.Body, nil
+}
+
+func DownloadManifest(image OciImageLink, digest string) (io.ReadCloser, error) {
+
+	var bearer = ""
+	if image.Registry == "docker.io" {
+		image.Registry = "registry-1.docker.io"
+	}
+
+	// Authenticate only if registryAuth and service are provided
+	if image.registryAuth != "" && image.service != "" {
+		token, err := getToken(image)
+		if err != nil {
+			return nil, err
+		}
+
+		bearer = "Bearer " + token
+	}
+
+	// Get Manifest at https://{registry}/v2/{repository}/manifests/{tag}
+	manifestRequest, err := http.NewRequest("GET", fmt.Sprintf("https://%s/v2/%s/manifests/%s", image.Registry, image.Repository, digest), nil)
+	if err != nil {
+		return nil, err
+	}
+
+	manifestRequest.Header.Add("Authorization", bearer)
+	manifestRequest.Header.Add("Accept", v1.MediaTypeImageManifest)
+
+	ctx, cancel := context.WithTimeout(manifestRequest.Context(), 2*time.Second)
+	defer cancel()
+
+	manifestRequest = manifestRequest.WithContext(ctx)
+
+	client := http.DefaultClient
+	manifestResult, err := client.Do(manifestRequest)
+
+	// If the request is unauthorized, try to get a token and retry
+	// This works only if bearer was empty, thus auth was not attempted
+	if manifestResult.StatusCode == http.StatusUnauthorized || manifestResult.StatusCode == 403 && image.registryAuth == "" {
+		authHeader := manifestResult.Header[http.CanonicalHeaderKey("WWW-Authenticate")]
+		if len(authHeader) == 0 {
+			return nil, fmt.Errorf("error getting index: %d", manifestResult.StatusCode)
+		}
+		realm, service := parseWWWAuthenticate(authHeader)
+		if realm == "" || service == "" {
+			return nil, fmt.Errorf("error getting index: %d", manifestResult.StatusCode)
+		}
+		image.service = service
+		image.registryAuth = realm
+		return DownloadManifest(image, digest)
+	}
+	if manifestResult.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("error getting index: %d", manifestResult.StatusCode)
+	}
+	if err != nil {
+		return nil, err
+	}
+
+	return manifestResult.Body, nil
 }
 
 func ReadManifest(manifestReader io.ReadCloser) (v1.Manifest, error) {

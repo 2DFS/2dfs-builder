@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 )
 
 // GenBlobrFromPath generates an oci tar+gz from a given folder, returns the path of the generated file
@@ -57,6 +58,9 @@ func CompressFolder(fromPath string) (string, error) {
 		if err != nil {
 			return err
 		}
+		header.AccessTime = time.Date(2000, 1, 1, 0, 0, 0, 0, time.UTC)
+		header.ChangeTime = time.Date(2000, 1, 1, 0, 0, 0, 0, time.UTC)
+		header.ModTime = time.Date(2000, 1, 1, 0, 0, 0, 0, time.UTC)
 
 		// Set the path within the tar archive relative to the source directory
 		header.Name = strings.TrimPrefix(strings.Replace(path, fromPath, "", -1), string(filepath.Separator))
@@ -98,6 +102,8 @@ func CompressFolder(fromPath string) (string, error) {
 		return "", fmt.Errorf("failed flushing gzip file: %w", err)
 	}
 
+	outFile.Seek(0, 0)
+	fmt.Printf("Compressed file digest: %s\n", CalculateSha256Digest(outFile))
 	return outFile.Name(), nil
 }
 
@@ -164,11 +170,10 @@ func DecompressFolder(targzFilePath string, outputDirectory string) error {
 	}
 }
 
-func CalculateSha256Digest(outFile *os.File) string {
+func CalculateSha256Digest(outFile io.ReadCloser) string {
 	allbytes := make([]byte, 0)
 	buffer := make([]byte, 500)
 
-	outFile.Seek(0, 0)
 	for {
 		n, err := outFile.Read(buffer)
 		allbytes = append(allbytes, buffer[:n]...)

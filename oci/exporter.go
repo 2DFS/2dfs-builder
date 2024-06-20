@@ -1,6 +1,8 @@
 package oci
 
 import (
+	"crypto/sha256"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -16,7 +18,7 @@ type FieldExporter interface {
 func (image *containerImage) ExportAsTar(path string) error {
 
 	// create a temporary folder
-	tmpFolder := filepath.Join(os.TempDir(), image.repository, image.tag)
+	tmpFolder := filepath.Join(os.TempDir(), fmt.Sprintf("%x", sha256.Sum256([]byte(image.url))))
 	if _, err := os.Stat(tmpFolder); err == nil {
 		os.RemoveAll(tmpFolder)
 	}
@@ -25,7 +27,7 @@ func (image *containerImage) ExportAsTar(path string) error {
 
 	// copy index and blobs
 	indexPath := filepath.Join(tmpFolder, "index.json")
-	index, err := image.indexCache.Get(image.url)
+	index, err := image.indexCache.Get(fmt.Sprintf("%x", sha256.Sum256([]byte(image.url))))
 	if err != nil {
 		return err
 	}
@@ -34,55 +36,59 @@ func (image *containerImage) ExportAsTar(path string) error {
 	if err != nil {
 		return err
 	}
+	fmt.Println("Index copied")
+
+	// TODO: create oci layout file
+
+	shaFolder := filepath.Join(tmpFolder, "blobs", "sha256")
+	os.MkdirAll(shaFolder, os.ModePerm)
 
 	// copy manifest, config and layers
 	for i, manifest := range image.index.Manifests {
 		// copy manifest
 		manifestDigest := manifest.Digest.Encoded()
-		manifestPath := filepath.Join(tmpFolder, "blobs", "sha256", manifestDigest)
-		manifestReader, err := image.blobCache.Get(manifestDigest)
+		manifestPath := filepath.Join(shaFolder, manifestDigest)
+		err = image.exportBlobByDigest(manifestPath, manifestDigest)
 		if err != nil {
 			return err
 		}
-		err = copyFile(manifestReader, manifestPath)
-		if err != nil {
-			manifestReader.Close()
-			return err
-		}
-		manifestReader.Close()
+		fmt.Printf("%s [EXPORTED]\n", manifestDigest)
 
 		//copy config
 		configDigest := image.manifests[i].Config.Digest.Encoded()
 		configPath := filepath.Join(tmpFolder, "blobs", "sha256", configDigest)
-		configReader, err := image.blobCache.Get(configDigest)
+		err = image.exportBlobByDigest(configPath, configDigest)
 		if err != nil {
 			return err
 		}
-		err = copyFile(configReader, configPath)
-		if err != nil {
-			configReader.Close()
-			return err
-		}
-		configReader.Close()
+		fmt.Printf("%s [EXPORTED]\n", configDigest)
 
 		//copy layers
 		for _, layer := range image.manifests[i].Layers {
 			layerDigest := layer.Digest.Encoded()
 			layerPath := filepath.Join(tmpFolder, "blobs", "sha256", layerDigest)
-			layerReader, err := image.blobCache.Get(configDigest)
+			err = image.exportBlobByDigest(layerPath, layerDigest)
 			if err != nil {
 				return err
 			}
-			err = copyFile(layerReader, layerPath)
-			if err != nil {
-				layerReader.Close()
-				return err
-			}
-			layerReader.Close()
-
+			fmt.Printf("%s [EXPORTED]\n", layerDigest)
 		}
+
 	}
 
+	//copy 2dfs
+	for allotment := range image.field.IterateAllotments() {
+		allotmentDigest := allotment.Digest
+		allotmentPath := filepath.Join(tmpFolder, "blobs", "sha256", allotmentDigest)
+		err = image.exportBlobByDigest(allotmentPath, allotmentDigest)
+		if err != nil {
+			return err
+		}
+		fmt.Printf("Field %d/%d [EXPORTED]\n", allotment.Row, allotment.Col)
+	}
+
+	// compress the folder
+	fmt.Printf("%s [COMPRESSING...]\n", fmt.Sprintf("%x", sha256.Sum256([]byte(image.url))))
 	archive, err := compress.CompressFolder(tmpFolder)
 	if err != nil {
 		return err
@@ -96,6 +102,19 @@ func (image *containerImage) ExportAsTar(path string) error {
 }
 
 func (e *containerImage) Upload(link OciImageLink) error {
+	return nil
+}
+
+func (image *containerImage) exportBlobByDigest(blobPath string, digest string) error {
+	blobReader, err := image.blobCache.Get(digest)
+	if err != nil {
+		return err
+	}
+	defer blobReader.Close()
+	err = copyFile(blobReader, blobPath)
+	if err != nil {
+		return err
+	}
 	return nil
 }
 

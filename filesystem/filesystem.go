@@ -12,6 +12,7 @@ func GetField() Field {
 func (f *TwoDFilesystem) AddAllotment(allotment Allotment) Field {
 	f.genAllotments(allotment.Row, allotment.Col)
 	f.Rows[allotment.Row].Allotments[allotment.Col].Digest = allotment.Digest
+	f.Rows[allotment.Row].Allotments[allotment.Col].FileName = allotment.FileName
 	return f
 }
 
@@ -58,4 +59,18 @@ func (f *TwoDFilesystem) genAllotments(row int, n int) {
 		}
 		f.Rows[row].TotAllotments = n + 1
 	}
+}
+
+// IterateAllotments iterates over all allotments in the filesystem
+func (f *TwoDFilesystem) IterateAllotments() chan Allotment {
+	c := make(chan Allotment)
+	go func() {
+		for _, row := range f.Rows {
+			for _, allotment := range row.Allotments {
+				c <- allotment
+			}
+		}
+		close(c)
+	}()
+	return c
 }

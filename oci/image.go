@@ -42,6 +42,7 @@ type containerImage struct {
 	url        string
 	indexCache cache.CacheStore
 	blobCache  cache.CacheStore
+	field      filesystem.Field
 	manifests  []v1.Manifest
 }
 
@@ -108,27 +109,27 @@ func (c *containerImage) loadIndex(url string, ctx context.Context) error {
 	// if path is an URL use Distribution spec to download image index
 	// if path is a local file use fsutil.ReadFile
 
+	// update container registry, tag and repository based on given url
+	c.updateImageInfo(url)
+
 	//check index local cache first
 	log.Default().Println("Loading image index")
 
-	indexReader, err := c.indexCache.Get(url)
+	indexReader, err := c.indexCache.Get(fmt.Sprintf("%x", sha256.Sum256([]byte(c.url))))
 	if err == nil {
-		log.Default().Printf("%s [CACHED] \n", url)
+		log.Default().Printf("%s [CACHED] \n", c.url)
 		// load index from cache
 		defer indexReader.Close()
 		index, err := ReadIndex(indexReader)
 		if err != nil {
 			// if error reading index, remove it from cache
 			log.Default().Printf("unable to read %s from cache, removing it... try again please \n", url)
-			c.indexCache.Del(url)
+			c.indexCache.Del(fmt.Sprintf("%x", sha256.Sum256([]byte(c.url))))
 			return err
 		}
 		c.index = index
 		return nil
 	}
-
-	// update container registry, tag and repository
-	c.updateImageInfo(url)
 
 	log.Default().Printf("[DOWNLOADING] %s \n", c.url)
 	// download image online
@@ -143,7 +144,7 @@ func (c *containerImage) loadIndex(url string, ctx context.Context) error {
 	log.Default().Println("Index downloaded")
 
 	// save index to cache
-	uploadWriter, err := c.indexCache.Add(url)
+	uploadWriter, err := c.indexCache.Add(fmt.Sprintf("%x", sha256.Sum256([]byte(c.url))))
 	if err != nil {
 		return err
 	}
@@ -157,7 +158,6 @@ func (c *containerImage) loadIndex(url string, ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	log.Default().Println("Index cached")
 
 	c.index = index
 	return nil
@@ -196,6 +196,7 @@ func (c *containerImage) updateImageInfo(url string) {
 func (c *containerImage) AddField(manifest filesystem.TwoDFsManifest, targetUrl string) error {
 
 	fs, err := c.buildFiled(manifest)
+	c.field = fs
 	if err != nil {
 		return err
 	}
@@ -204,7 +205,7 @@ func (c *containerImage) AddField(manifest filesystem.TwoDFsManifest, targetUrl 
 	fsDigest := fmt.Sprintf("%x", sha256.Sum256(marshalledFs))
 
 	// if new fs, write it to cache
-	if _, err := c.blobCache.Get(fsDigest); err != nil {
+	if !c.blobCache.Check(fsDigest) {
 		fsWriter, err := c.blobCache.Add(fsDigest)
 		if err != nil {
 			return err
@@ -234,7 +235,7 @@ func (c *containerImage) AddField(manifest filesystem.TwoDFsManifest, targetUrl 
 		}
 		manifestDigest := fmt.Sprintf("%x", sha256.Sum256(marshalledManifest))
 		// update manifest cache
-		if _, err := c.blobCache.Get(manifestDigest); err != nil {
+		if !c.blobCache.Check(manifestDigest) {
 			manifestWriter, err := c.blobCache.Add(manifestDigest)
 			if err != nil {
 				return err
@@ -254,8 +255,9 @@ func (c *containerImage) AddField(manifest filesystem.TwoDFsManifest, targetUrl 
 	if err != nil {
 		return err
 	}
-	c.indexCache.Del(targetUrl)
-	indexWriter, err := c.indexCache.Add(targetUrl)
+	c.updateImageInfo(targetUrl)
+	c.indexCache.Del(fmt.Sprintf("%x", sha256.Sum256([]byte(c.url))))
+	indexWriter, err := c.indexCache.Add(fmt.Sprintf("%x", sha256.Sum256([]byte(c.url))))
 	if err != nil {
 		return err
 	}
@@ -263,7 +265,6 @@ func (c *containerImage) AddField(manifest filesystem.TwoDFsManifest, targetUrl 
 	if err != nil {
 		return err
 	}
-	c.updateImageInfo(targetUrl)
 	return nil
 }
 
@@ -275,15 +276,14 @@ func (c *containerImage) downloadManifests() error {
 		}
 
 		// check if blob cached
-		_, err := c.blobCache.Get(manifest.Digest.Encoded())
-		if err == nil {
+		manifestCached := c.blobCache.Check(manifest.Digest.Encoded())
+		if manifestCached {
 			// blob already cached, continue
 			log.Printf("%s [CACHED]", manifest.Digest.Encoded())
-			continue
+		} else {
+			// download blob
+			c.downloadAndCache(manifest.Digest, v1.MediaTypeImageManifest)
 		}
-
-		// download blob
-		c.downloadAndCache(manifest.Digest, v1.MediaTypeImageManifest)
 
 		// read manifest from cache and update container struct
 		manifestCachereader, err := c.blobCache.Get(manifest.Digest.Encoded())
@@ -306,8 +306,8 @@ func (c *containerImage) downloadManifestBlobs(manifest v1.Manifest) error {
 	if manifest.Config.Digest.Algorithm() != digest.SHA256 {
 		return fmt.Errorf("unsupported digest algorithm: %s", manifest.Config.Digest.Algorithm().String())
 	}
-	_, err := c.blobCache.Get(manifest.Config.Digest.Encoded())
-	if err != nil {
+	configCached := c.blobCache.Check(manifest.Config.Digest.Encoded())
+	if !configCached {
 		// blob not cached cached, downloading
 		c.downloadAndCache(manifest.Config.Digest, manifest.Config.MediaType)
 
@@ -320,8 +320,8 @@ func (c *containerImage) downloadManifestBlobs(manifest v1.Manifest) error {
 		if layer.Digest.Algorithm() != digest.SHA256 {
 			return fmt.Errorf("unsupported digest algorithm: %s", layer.Digest.Algorithm().String())
 		}
-		_, err := c.blobCache.Get(layer.Digest.Encoded())
-		if err != nil {
+		cached := c.blobCache.Check(layer.Digest.Encoded())
+		if !cached {
 			// blob not cached cached, downloading
 			// TODO: this can be parallelized!
 			err := c.downloadAndCache(layer.Digest, layer.MediaType)
@@ -358,7 +358,7 @@ func (c *containerImage) downloadAndCache(downloadDigest digest.Digest, mediaTyp
 			return err
 		}
 	} else {
-		ctx, cancel := context.WithTimeout(context.Background(), 30)
+		ctx := context.Background()
 		readCloser, err = DownloadBlob(
 			ctx,
 			OciImageLink{
@@ -369,11 +369,10 @@ func (c *containerImage) downloadAndCache(downloadDigest digest.Digest, mediaTyp
 			downloadDigest,
 			mediaType,
 		)
-		defer cancel()
-		defer readCloser.Close()
 		if err != nil {
 			return err
 		}
+		defer readCloser.Close()
 	}
 
 	// upload blob to cache store
@@ -402,7 +401,7 @@ func (c *containerImage) GetExporter() FieldExporter {
 
 func (c *containerImage) buildFiled(manifest filesystem.TwoDFsManifest) (filesystem.Field, error) {
 
-	tmpFolder := filepath.Join(os.TempDir(), c.repository, c.tag, "field")
+	tmpFolder := filepath.Join(os.TempDir(), fmt.Sprintf("%x-field", sha256.Sum256([]byte(c.url))))
 	if _, err := os.Stat(tmpFolder); err == nil {
 		os.RemoveAll(tmpFolder)
 	}
@@ -427,6 +426,7 @@ func (c *containerImage) buildFiled(manifest filesystem.TwoDFsManifest) (filesys
 		if err != nil {
 			return nil, err
 		}
+		fmt.Printf("File %s [COPY] \n", dst.Name())
 
 		//open source file
 		src, err := os.Open(a.Src)
@@ -445,12 +445,16 @@ func (c *containerImage) buildFiled(manifest filesystem.TwoDFsManifest) (filesys
 
 		//compress allotment folder
 		archiveName, err := compress.CompressFolder(allotmentFolder)
+		if err != nil {
+			return nil, err
+		}
 		archive, err := os.Open(archiveName)
 		if err != nil {
 			return nil, err
 		}
 
 		//cache blob
+		archive.Seek(0, 0)
 		digest := compress.CalculateSha256Digest(archive)
 		if !c.blobCache.Check(digest) {
 			blobWriter, err := c.blobCache.Add(digest)
@@ -458,6 +462,7 @@ func (c *containerImage) buildFiled(manifest filesystem.TwoDFsManifest) (filesys
 				archive.Close()
 				return nil, err
 			}
+			archive.Seek(0, 0)
 			_, err = io.Copy(blobWriter, archive)
 			blobWriter.Close()
 			archive.Close()
@@ -465,16 +470,17 @@ func (c *containerImage) buildFiled(manifest filesystem.TwoDFsManifest) (filesys
 				c.blobCache.Del(digest)
 				return nil, err
 			}
+			fmt.Printf("Alltoment %d/%d %s [CREATED] \n", a.Row, a.Col, digest)
 		}
 
 		//add allotments
+
 		f.AddAllotment(filesystem.Allotment{
 			Row:      a.Row,
 			Col:      a.Col,
 			Digest:   digest,
-			FileName: a.Dst,
+			FileName: dstPath,
 		})
-
 	}
 
 	return f, nil
@@ -495,7 +501,5 @@ func createFileWithDirs(p string) (*os.File, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to create file: %w", err)
 	}
-
-	fmt.Println("File and directories created successfully!")
 	return f, nil
 }

@@ -36,4 +36,6 @@ type Field interface {
 	Marshal() string
 	// Unmarshal Given a string marshaled from TwoDFilesystem returns a Field object
 	Unmarshal(string) (Field, error)
+	// IterateAllotments iterates over all allotments in the filesystem
+	IterateAllotments() chan Allotment
 }

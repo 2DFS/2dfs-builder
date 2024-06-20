@@ -73,6 +73,8 @@ func (b *cachestore) Check(digest string) bool {
 	}
 	calculatedDigest := compress.CalculateSha256Digest(file)
 	if calculatedDigest != digest {
+		fmt.Printf("Invalidated cache entry %s\n", digest)
+		b.Del(digest)
 		return false
 	}
 	return true

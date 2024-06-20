@@ -134,6 +134,7 @@ func TestCalculateSha256Digest(t *testing.T) {
 	}
 
 	// Calculate the SHA256 digest of the temporary file
+	tempFile.Seek(0, 0)
 	digest := CalculateSha256Digest(tempFile)
 
 	// Verify that the calculated digest matches the expected digest

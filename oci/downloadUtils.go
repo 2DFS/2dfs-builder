@@ -7,7 +7,6 @@ import (
 	"io"
 	"net/http"
 	"strings"
-	"time"
 
 	"github.com/opencontainers/go-digest"
 	v1 "github.com/opencontainers/image-spec/specs-go/v1"
@@ -50,10 +49,10 @@ func DownloadIndex(image OciImageLink) (v1.Index, error) {
 
 	indexRequest.Header.Add("Authorization", bearer)
 
-	ctx, cancel := context.WithTimeout(indexRequest.Context(), 2*time.Second)
-	defer cancel()
+	//ctx, cancel := context.WithTimeout(indexRequest.Context(), 10*time.Second)
+	//defer cancel()
 
-	indexRequest = indexRequest.WithContext(ctx)
+	//indexRequest = indexRequest.WithContext(ctx)
 
 	client := http.DefaultClient
 	indexResult, err := client.Do(indexRequest)
@@ -115,10 +114,10 @@ func getToken(image OciImageLink) (string, error) {
 		return "", err
 	}
 
-	ctx, cancel := context.WithTimeout(tokenRequest.Context(), 2*time.Second)
-	defer cancel()
+	//ctx, cancel := context.WithTimeout(tokenRequest.Context(), 10*time.Second)
+	//defer cancel()
 
-	tokenRequest = tokenRequest.WithContext(ctx)
+	//tokenRequest = tokenRequest.WithContext(ctx)
 
 	client := http.DefaultClient
 	tokenResult, err := client.Do(tokenRequest)
@@ -205,6 +204,9 @@ func DownloadBlob(ctx context.Context, image OciImageLink, digest digest.Digest,
 
 	client := http.DefaultClient
 	blobResult, err := client.Do(blobRequest)
+	if err != nil {
+		return nil, err
+	}
 
 	// If the request is unauthorized, try to get a token and retry
 	// This works only if bearer was empty, thus auth was not attempted
@@ -258,10 +260,10 @@ func DownloadManifest(image OciImageLink, digest string) (io.ReadCloser, error) 
 	manifestRequest.Header.Add("Authorization", bearer)
 	manifestRequest.Header.Add("Accept", v1.MediaTypeImageManifest)
 
-	ctx, cancel := context.WithTimeout(manifestRequest.Context(), 2*time.Second)
-	defer cancel()
+	//ctx, cancel := context.WithTimeout(manifestRequest.Context(), 10*time.Second)
+	//defer cancel()
 
-	manifestRequest = manifestRequest.WithContext(ctx)
+	//manifestRequest = manifestRequest.WithContext(ctx)
 
 	client := http.DefaultClient
 	manifestResult, err := client.Do(manifestRequest)

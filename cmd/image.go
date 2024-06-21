@@ -2,12 +2,15 @@ package cmd
 
 import (
 	"context"
+	"crypto/sha256"
 	"fmt"
+	"io"
 	"log"
 	"os"
 	"time"
 
 	"github.com/giobart/2dfs-builder/cache"
+	"github.com/giobart/2dfs-builder/filesystem"
 	"github.com/giobart/2dfs-builder/oci"
 	"github.com/jedib0t/go-pretty/v6/table"
 	"github.com/spf13/cobra"
@@ -18,12 +21,14 @@ func init() {
 	imageCmd.AddCommand(imageListCmd)
 	imageListCmd.Flags().BoolVarP(&showHash, "reference", "q", false, "returns only the refrerence list")
 	imageCmd.AddCommand(rm)
+	rm.Flags().BoolVarP(&removeAll, "all", "a", false, "removes all images")
 	imageCmd.AddCommand(prune)
 	imageCmd.AddCommand(export)
 	export.Flags().StringVar(&exportFormat, "as", "", "export format, supported formats: tar")
 }
 
 var showHash bool
+var removeAll bool
 var imageCmd = &cobra.Command{
 	Use:   "image",
 	Short: "Commands to manage images",
@@ -147,10 +152,13 @@ func removeImages(args []string) error {
 	if err != nil {
 		return err
 	}
-
+	if removeAll {
+		args = indexCacheStore.List()
+	}
 	//remove index
 	for _, arg := range args {
 		indexCacheStore.Del(arg)
+		indexCacheStore.Del(fmt.Sprintf("%x", sha256.Sum256([]byte(arg))))
 	}
 	pruneBlobs()
 
@@ -186,7 +194,7 @@ func pruneBlobs() error {
 			return err
 		}
 
-		//add reference for each layer,manifest and config file referenced by the index
+		//add reference for each layer,manifest,config and allotment file referenced by the index
 		for _, m := range idx.Manifests {
 			blobreferences[m.Digest.Encoded()]++
 			manifestReader, err := blobCacheStore.Get(m.Digest.Encoded())
@@ -200,6 +208,24 @@ func pruneBlobs() error {
 			}
 			for _, l := range manifest.Layers {
 				blobreferences[l.Digest.Encoded()]++
+				if l.MediaType == oci.TwoDfsMediaType {
+					tdfsReader, err := blobCacheStore.Get(l.Digest.Encoded())
+					if err != nil {
+						return err
+					}
+					fieldBytes, err := io.ReadAll(tdfsReader)
+					tdfsReader.Close()
+					if err != nil {
+						return err
+					}
+					tdfs, err := filesystem.GetField().Unmarshal(string(fieldBytes))
+					if err != nil {
+						return err
+					}
+					for f := range tdfs.IterateAllotments() {
+						blobreferences[f.Digest]++
+					}
+				}
 			}
 			blobreferences[manifest.Config.Digest.Encoded()]++
 		}

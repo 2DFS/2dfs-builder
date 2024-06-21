@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 
 	"log"
@@ -37,15 +38,25 @@ const (
 )
 
 type containerImage struct {
-	index      v1.Index
-	registry   string
-	repository string
-	tag        string
-	url        string
-	indexCache cache.CacheStore
-	blobCache  cache.CacheStore
-	field      filesystem.Field
-	manifests  []v1.Manifest
+	index        v1.Index
+	indexHash    string
+	registry     string
+	repository   string
+	tag          string
+	url          string
+	partitions   []partition
+	partitionTag string
+	indexCache   cache.CacheStore
+	blobCache    cache.CacheStore
+	field        filesystem.Field
+	manifests    []v1.Manifest
+}
+
+type partition struct {
+	x1 int
+	y1 int
+	x2 int
+	y2 int
 }
 
 type Image interface {
@@ -142,7 +153,13 @@ func GetLocalImage(ctx context.Context, reference string) (Image, error) {
 
 	idxReader, err := imgstore.Get(reference)
 	if err != nil {
-		return nil, err
+		// if reference not found, try getting the image using the url
+		img.updateImageInfo(reference)
+		fmt.Printf("Resolving image url %s locally...\n", img.indexHash)
+		idxReader, err = imgstore.Get(img.indexHash)
+		if err != nil {
+			return nil, err
+		}
 	}
 	defer idxReader.Close()
 
@@ -150,8 +167,11 @@ func GetLocalImage(ctx context.Context, reference string) (Image, error) {
 	if err != nil {
 		return nil, err
 	}
+
 	img.index = idx
-	img.updateImageInfo(idx.Annotations[ImageNameAnnotation])
+	if img.url == "" {
+		img.updateImageInfo(idx.Annotations[ImageNameAnnotation])
+	}
 
 	err = img.downloadManifests()
 	if err != nil {
@@ -160,6 +180,17 @@ func GetLocalImage(ctx context.Context, reference string) (Image, error) {
 
 	for _, manifest := range img.manifests {
 		err = img.downloadManifestBlobs(manifest)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	// check if image requires partitioning
+	if len(img.partitions) > 0 {
+		fmt.Printf("Partitioning the image...\n")
+		idx.Annotations[ImageNameAnnotation] = img.registry + "/" + img.repository + ":" + img.partitionTag
+		img.indexHash = fmt.Sprintf("%x", sha256.Sum256([]byte(idx.Annotations[ImageNameAnnotation])))
+		err = img.partition()
 		if err != nil {
 			return nil, err
 		}
@@ -178,7 +209,7 @@ func (c *containerImage) loadIndex(url string, ctx context.Context) error {
 	//check index local cache first
 	log.Default().Println("Loading image index")
 
-	indexReader, err := c.indexCache.Get(fmt.Sprintf("%x", sha256.Sum256([]byte(c.url))))
+	indexReader, err := c.indexCache.Get(c.indexHash)
 	if err == nil {
 		log.Default().Printf("%s [CACHED] \n", c.url)
 		// load index from cache
@@ -187,7 +218,7 @@ func (c *containerImage) loadIndex(url string, ctx context.Context) error {
 		if err != nil {
 			// if error reading index, remove it from cache
 			log.Default().Printf("unable to read %s from cache, removing it... try again please \n", url)
-			c.indexCache.Del(fmt.Sprintf("%x", sha256.Sum256([]byte(c.url))))
+			c.indexCache.Del(c.indexHash)
 			return err
 		}
 		c.index = index
@@ -212,7 +243,7 @@ func (c *containerImage) loadIndex(url string, ctx context.Context) error {
 	log.Default().Println("Index downloaded")
 
 	// save index to cache
-	uploadWriter, err := c.indexCache.Add(fmt.Sprintf("%x", sha256.Sum256([]byte(c.url))))
+	uploadWriter, err := c.indexCache.Add(c.indexHash)
 	if err != nil {
 		return err
 	}
@@ -233,6 +264,7 @@ func (c *containerImage) loadIndex(url string, ctx context.Context) error {
 
 func (c *containerImage) updateImageInfo(url string) {
 	urlParts := strings.SplitN(url, "/", 2)
+	c.partitions = []partition{}
 	if len(urlParts) == 1 {
 		c.registry = "docker.io"
 		c.repository = url
@@ -244,7 +276,6 @@ func (c *containerImage) updateImageInfo(url string) {
 			c.registry = "docker.io"
 		} else {
 			c.registry = registry
-
 		}
 	}
 
@@ -253,15 +284,30 @@ func (c *containerImage) updateImageInfo(url string) {
 		c.repository = "library/" + c.repository
 	}
 
-	//check tag
+	//check tag and partition
 	tagAndRepo := strings.Split(c.repository, ":")
 	c.tag = "latest"
 	if len(tagAndRepo) == 2 {
 		c.tag = tagAndRepo[1]
 		c.repository = tagAndRepo[0]
+		if strings.Contains(c.tag, "+") {
+			//semantic tag with partition
+			fmt.Printf("Semantic tag with partition detected %s\n", c.tag)
+			c.partitionTag = c.tag
+			tagAndPartitions := strings.Split(c.tag, "+")
+			c.tag = tagAndPartitions[0]
+			for _, p := range tagAndPartitions[1:] {
+				part, err := parsePartition(p)
+				if err != nil {
+					fmt.Printf("[WARNING] Invalid partition %s, skipping...\n", p)
+					continue
+				}
+				c.partitions = append(c.partitions, part)
+			}
+		}
 	}
-
 	c.url = c.registry + "/" + c.repository + ":" + c.tag
+	c.indexHash = fmt.Sprintf("%x", sha256.Sum256([]byte(c.url)))
 }
 
 func (c *containerImage) AddField(manifest filesystem.TwoDFsManifest, targetUrl string) error {
@@ -343,8 +389,97 @@ func (c *containerImage) AddField(manifest filesystem.TwoDFsManifest, targetUrl 
 		return err
 	}
 
-	c.indexCache.Del(fmt.Sprintf("%x", sha256.Sum256([]byte(c.url))))
-	indexWriter, err := c.indexCache.Add(fmt.Sprintf("%x", sha256.Sum256([]byte(c.url))))
+	c.indexCache.Del(c.indexHash)
+	indexWriter, err := c.indexCache.Add(c.indexHash)
+	if err != nil {
+		return err
+	}
+	_, err = indexWriter.Write(indexBytes)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+func (c *containerImage) partition() error {
+
+	partitionsHash := []string{}
+
+	for i, manifest := range c.manifests {
+		filteredLayers := []v1.Descriptor{}
+		//removing 2dfs temporary layer if present
+		for _, layer := range manifest.Layers {
+			if layer.MediaType == TwoDfsMediaType {
+				//if 2dfs layer parse field and partition allotments
+				c.readField(layer.Digest.Encoded())
+				if len(partitionsHash) == 0 {
+					if c.field != nil {
+						for allotment := range c.field.IterateAllotments() {
+							for _, p := range c.partitions {
+								if allotment.Row >= p.x1 && allotment.Row <= p.x2 && allotment.Col >= p.y1 && allotment.Col <= p.y2 {
+									partitionsHash = append(partitionsHash, allotment.Digest)
+									//TODO remove duplicated
+								}
+							}
+						}
+					}
+				}
+			} else {
+				filteredLayers = append(filteredLayers, layer)
+			}
+		}
+		if len(partitionsHash) > 0 {
+			//adding partitioned layers
+			for _, p := range partitionsHash {
+				blobSize, err := c.blobCache.GetSize(p)
+				if err != nil {
+					return err
+				}
+				fmt.Printf("Partition %s [CREATING]\n", p)
+				filteredLayers = append(filteredLayers, v1.Descriptor{
+					MediaType: "application/vnd.oci.image.layer.v1.tar+gzip",
+					Digest:    digest.Digest(fmt.Sprintf("sha256:%s", p)),
+					Size:      blobSize,
+				})
+			}
+		} else {
+			return fmt.Errorf("no 2DFS partitions found. Make sure the image has format OCI+2DFS and that the partition matches the allotments")
+		}
+		c.manifests[i].Layers = filteredLayers
+	}
+
+	for i, _ := range c.index.Manifests {
+		marshalledManifest, err := json.Marshal(c.manifests[i])
+		if err != nil {
+			return err
+		}
+		manifestDigest := fmt.Sprintf("%x", sha256.Sum256(marshalledManifest))
+		// update manifest cache
+		if !c.blobCache.Check(manifestDigest) {
+			manifestWriter, err := c.blobCache.Add(manifestDigest)
+			if err != nil {
+				return err
+			}
+			_, err = manifestWriter.Write(marshalledManifest)
+			if err != nil {
+				manifestWriter.Close()
+				return err
+			}
+			manifestWriter.Close()
+		} else {
+			fmt.Printf("%s [CACHED]\n", manifestDigest)
+		}
+		c.index.Manifests[i].Digest = digest.Digest(fmt.Sprintf("sha256:%s", manifestDigest))
+	}
+
+	// update index cache
+	indexBytes, err := json.Marshal(c.index)
+	if err != nil {
+		return err
+	}
+
+	c.indexCache.Del(c.indexHash)
+	indexWriter, err := c.indexCache.Add(c.indexHash)
 	if err != nil {
 		return err
 	}
@@ -488,7 +623,7 @@ func (c *containerImage) GetExporter() FieldExporter {
 
 func (c *containerImage) buildFiled(manifest filesystem.TwoDFsManifest) (filesystem.Field, error) {
 
-	tmpFolder := filepath.Join(os.TempDir(), fmt.Sprintf("%x-field", sha256.Sum256([]byte(c.url))))
+	tmpFolder := filepath.Join(os.TempDir(), fmt.Sprintf("%x-field", c.indexHash))
 	if _, err := os.Stat(tmpFolder); err == nil {
 		os.RemoveAll(tmpFolder)
 	}
@@ -513,7 +648,7 @@ func (c *containerImage) buildFiled(manifest filesystem.TwoDFsManifest) (filesys
 		if err != nil {
 			return nil, err
 		}
-		fmt.Printf("File %s [COPY] \n", dst.Name())
+		fmt.Printf("File %s [COPY] \n", a.Src)
 
 		//open source file
 		src, err := os.Open(a.Src)
@@ -589,4 +724,50 @@ func createFileWithDirs(p string) (*os.File, error) {
 		return nil, fmt.Errorf("failed to create file: %w", err)
 	}
 	return f, nil
+}
+
+func parsePartition(p string) (partition, error) {
+	parts := strings.Split(p, ",")
+	result := partition{}
+	if len(parts) != 4 {
+		return result, fmt.Errorf("invalid partition %s", p)
+	}
+	var err error
+	result.x1, err = strconv.Atoi(parts[0])
+	if err != nil {
+		return result, err
+	}
+	result.y1, err = strconv.Atoi(parts[1])
+	if err != nil {
+		return result, err
+	}
+	result.x2, err = strconv.Atoi(parts[2])
+	if err != nil {
+		return result, err
+	}
+	result.y2, err = strconv.Atoi(parts[3])
+	if err != nil {
+		return result, err
+	}
+	return result, nil
+}
+
+func (c *containerImage) readField(fieldHash string) error {
+	if c.field == nil {
+		fieldReader, err := c.blobCache.Get(fieldHash)
+		if err != nil {
+			return err
+		}
+		defer fieldReader.Close()
+		fullField, err := io.ReadAll(fieldReader)
+		if err != nil {
+			return err
+		}
+		field, err := filesystem.GetField().Unmarshal(string(fullField[:]))
+		if err != nil {
+			return err
+		}
+		c.field = field
+	}
+	return nil
 }

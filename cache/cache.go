@@ -16,6 +16,8 @@ type cachestore struct {
 type CacheStore interface {
 	// Get returns the reader to the cache entry
 	Get(digest string) (io.ReadCloser, error)
+	//
+	GetSize(digest string) (int64, error)
 	// Add generates the empty cache entry and returns its writer
 	Add(digest string) (io.WriteCloser, error)
 	// Del removes the entry from the store
@@ -51,6 +53,15 @@ func (b *cachestore) Get(digest string) (io.ReadCloser, error) {
 		return nil, err
 	}
 	return openBlob, nil
+}
+
+func (b *cachestore) GetSize(digest string) (int64, error) {
+	dest := filepath.Join(b.path, digest)
+	stat, err := os.Stat(dest)
+	if err != nil {
+		return 0, err
+	}
+	return stat.Size(), nil
 }
 
 func (b *cachestore) Add(digest string) (io.WriteCloser, error) {

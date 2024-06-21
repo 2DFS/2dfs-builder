@@ -1,7 +1,6 @@
 package oci
 
 import (
-	"crypto/sha256"
 	"fmt"
 	"io"
 	"os"
@@ -26,7 +25,7 @@ func (image *containerImage) ExportAsTar(path string) error {
 	// create a temporary folder
 	s.Suffix = fmt.Sprintf("%s [EXPORTING...]\n", image.url)
 	s.Restart()
-	tmpFolder := filepath.Join(os.TempDir(), fmt.Sprintf("%x", sha256.Sum256([]byte(image.url))))
+	tmpFolder := filepath.Join(os.TempDir(), image.indexHash)
 	if _, err := os.Stat(tmpFolder); err == nil {
 		os.RemoveAll(tmpFolder)
 	}
@@ -35,7 +34,7 @@ func (image *containerImage) ExportAsTar(path string) error {
 
 	// copy index and blobs
 	indexPath := filepath.Join(tmpFolder, "index.json")
-	index, err := image.indexCache.Get(fmt.Sprintf("%x", sha256.Sum256([]byte(image.url))))
+	index, err := image.indexCache.Get(image.indexHash)
 	if err != nil {
 		return err
 	}
@@ -107,8 +106,8 @@ func (image *containerImage) ExportAsTar(path string) error {
 			image.field = field
 		}
 	}
-	//export 2dfs if necessary
 
+	//export 2dfs if present and no partitioning required
 	if image.field != nil {
 		for allotment := range image.field.IterateAllotments() {
 			allotmentDigest := allotment.Digest
@@ -124,7 +123,7 @@ func (image *containerImage) ExportAsTar(path string) error {
 
 	// compress the folder
 	s = spinner.New(spinner.CharSets[9], 100*time.Millisecond)
-	s.Suffix = fmt.Sprintf(" %s [COMPRESSING...]\n", fmt.Sprintf("%x", sha256.Sum256([]byte(image.url))))
+	s.Suffix = fmt.Sprintf(" %s [COMPRESSING...]\n", image.indexHash)
 	s.Start()
 	archive, err := compress.CompressFolder(tmpFolder)
 	if err != nil {

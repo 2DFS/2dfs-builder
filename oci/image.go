@@ -107,6 +107,67 @@ func NewImage(ctx context.Context, url string, forcepull bool) (Image, error) {
 
 }
 
+func GetLocalImage(ctx context.Context, reference string) (Image, error) {
+
+	ctxIndexPosition := ctx.Value(IndexStoreContextKey)
+	indexStoreLocation := ""
+	if ctxIndexPosition != nil {
+		indexStoreLocation = ctxIndexPosition.(string)
+	} else {
+		return nil, fmt.Errorf("Index store location not found in context")
+	}
+
+	ctxBlobPosition := ctx.Value(BlobStoreContextKey)
+	blobStoreLocation := ""
+	if ctxBlobPosition != nil {
+		blobStoreLocation = ctxBlobPosition.(string)
+	} else {
+		return nil, fmt.Errorf("Blob store location not found in context")
+	}
+
+	imgstore, err := cache.NewCacheStore(indexStoreLocation)
+	if err != nil {
+		return nil, err
+	}
+	blobstore, err := cache.NewCacheStore(blobStoreLocation)
+	if err != nil {
+		return nil, err
+	}
+
+	img := &containerImage{
+		indexCache: imgstore,
+		blobCache:  blobstore,
+		manifests:  []v1.Manifest{},
+	}
+
+	idxReader, err := imgstore.Get(reference)
+	if err != nil {
+		return nil, err
+	}
+	defer idxReader.Close()
+
+	idx, err := ReadIndex(idxReader)
+	if err != nil {
+		return nil, err
+	}
+	img.index = idx
+	img.updateImageInfo(idx.Annotations[ImageNameAnnotation])
+
+	err = img.downloadManifests()
+	if err != nil {
+		return nil, err
+	}
+
+	for _, manifest := range img.manifests {
+		err = img.downloadManifestBlobs(manifest)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	return img, nil
+}
+
 func (c *containerImage) loadIndex(url string, ctx context.Context) error {
 	// if path is an URL use Distribution spec to download image index
 	// if path is a local file use fsutil.ReadFile
@@ -143,6 +204,11 @@ func (c *containerImage) loadIndex(url string, ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+
+	if index.Annotations == nil {
+		index.Annotations = make(map[string]string)
+	}
+	index.Annotations[ImageNameAnnotation] = c.url
 	log.Default().Println("Index downloaded")
 
 	// save index to cache
@@ -176,6 +242,9 @@ func (c *containerImage) updateImageInfo(url string) {
 		c.repository = fmt.Sprintf(urlParts[1])
 		if registryRegex.FindStringIndex(registry) == nil {
 			c.registry = "docker.io"
+		} else {
+			c.registry = registry
+
 		}
 	}
 
@@ -218,6 +287,8 @@ func (c *containerImage) AddField(manifest filesystem.TwoDFsManifest, targetUrl 
 			return err
 		}
 		defer fsWriter.Close()
+	} else {
+		fmt.Printf("Field %s [CACHED]\n", fsDigest)
 	}
 
 	c.updateImageInfo(targetUrl)
@@ -240,6 +311,8 @@ func (c *containerImage) AddField(manifest filesystem.TwoDFsManifest, targetUrl 
 	}
 
 	// re-compute manifest digests and update index and caches
+	c.index.Annotations[ImageNameAnnotation] = c.url
+
 	for i, _ := range c.index.Manifests {
 		marshalledManifest, err := json.Marshal(c.manifests[i])
 		if err != nil {
@@ -258,6 +331,8 @@ func (c *containerImage) AddField(manifest filesystem.TwoDFsManifest, targetUrl 
 				return err
 			}
 			manifestWriter.Close()
+		} else {
+			fmt.Printf("%s [CACHED]\n", manifestDigest)
 		}
 		c.index.Manifests[i].Digest = digest.Digest(fmt.Sprintf("sha256:%s", manifestDigest))
 	}

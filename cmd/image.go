@@ -1,8 +1,11 @@
 package cmd
 
 import (
+	"context"
+	"fmt"
+	"log"
 	"os"
-	"strings"
+	"time"
 
 	"github.com/giobart/2dfs-builder/cache"
 	"github.com/giobart/2dfs-builder/oci"
@@ -13,7 +16,11 @@ import (
 func init() {
 	rootCmd.AddCommand(imageCmd)
 	imageCmd.AddCommand(imageListCmd)
-	imageListCmd.Flags().BoolVarP(&showHash, "hash", "q", false, "config file (default is .2dfs.json)")
+	imageListCmd.Flags().BoolVarP(&showHash, "reference", "q", false, "returns only the refrerence list")
+	imageCmd.AddCommand(rm)
+	imageCmd.AddCommand(prune)
+	imageCmd.AddCommand(export)
+	export.Flags().StringVar(&exportFormat, "as", "", "export format, supported formats: tar")
 }
 
 var showHash bool
@@ -26,6 +33,31 @@ var imageListCmd = &cobra.Command{
 	Short: "List local images",
 	RunE: func(cmd *cobra.Command, args []string) error {
 		return listImages()
+	},
+}
+var rm = &cobra.Command{
+	Use:   "rm [reference]...",
+	Short: "remove local images",
+	Args:  cobra.ArbitraryArgs,
+	RunE: func(cmd *cobra.Command, args []string) error {
+		return removeImages(args)
+	},
+}
+
+var prune = &cobra.Command{
+	Use:   "prune",
+	Short: "clean unreferenced cache entries",
+	RunE: func(cmd *cobra.Command, args []string) error {
+		return pruneBlobs()
+	},
+}
+
+var export = &cobra.Command{
+	Use:   "export [reference] [targetFile]",
+	Short: "export image to target file. E.g. export [imgref] MyImage.tar.gz",
+	Args:  cobra.ExactArgs(2),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		return imageExport(args[0], args[1])
 	},
 }
 
@@ -66,7 +98,7 @@ func listImages() error {
 
 	outTable := table.NewWriter()
 	outTable.SetOutputMirror(os.Stdout)
-	outTable.AppendHeader(table.Row{"#", "Name", "Tag", "Type"})
+	outTable.AppendHeader(table.Row{"#", "Url", "Tag", "Type", "Reference"})
 	outTable.AppendSeparator()
 
 	for i, hash := range indexHashList {
@@ -98,15 +130,117 @@ func listImages() error {
 				break
 			}
 		}
-		imageUrl := idx.Manifests[0].Annotations["org.opencontainers.image.url"]
+		imageUrl := idx.Annotations[oci.ImageNameAnnotation]
 		//keep only last part of the url
-		imageUrl = imageUrl[strings.LastIndex(imageUrl, "/")+1:]
 		imageTag := idx.Manifests[0].Annotations["org.opencontainers.image.version"]
-		outTable.AppendRow([]interface{}{i, imageUrl, imageTag, imageType})
+		outTable.AppendRow([]interface{}{i, imageUrl, imageTag, imageType, hash})
 	}
 
 	outTable.SetStyle(tableStyle)
 	outTable.Render()
+
+	return nil
+}
+
+func removeImages(args []string) error {
+	indexCacheStore, err := cache.NewCacheStore(IndexStorePath)
+	if err != nil {
+		return err
+	}
+
+	//remove index
+	for _, arg := range args {
+		indexCacheStore.Del(arg)
+	}
+	pruneBlobs()
+
+	return nil
+}
+
+// pruneBlobs removes blobs that are not referenced by any index
+func pruneBlobs() error {
+	indexCacheStore, err := cache.NewCacheStore(IndexStorePath)
+	if err != nil {
+		return err
+	}
+	blobCacheStore, err := cache.NewCacheStore(BlobStorePath)
+	if err != nil {
+		return err
+	}
+
+	//create reference counter for blobs
+	blobs := blobCacheStore.List()
+	blobreferences := make(map[string]int)
+	for _, blob := range blobs {
+		blobreferences[blob] = 0
+	}
+	indexes := indexCacheStore.List()
+	for _, index := range indexes {
+		reader, err := indexCacheStore.Get(index)
+		if err != nil {
+			return err
+		}
+		idx, err := oci.ReadIndex(reader)
+		reader.Close()
+		if err != nil {
+			return err
+		}
+
+		//add reference for each layer,manifest and config file referenced by the index
+		for _, m := range idx.Manifests {
+			blobreferences[m.Digest.Encoded()]++
+			manifestReader, err := blobCacheStore.Get(m.Digest.Encoded())
+			if err != nil {
+				return err
+			}
+			manifest, err := oci.ReadManifest(manifestReader)
+			manifestReader.Close()
+			if err != nil {
+				return err
+			}
+			for _, l := range manifest.Layers {
+				blobreferences[l.Digest.Encoded()]++
+			}
+			blobreferences[manifest.Config.Digest.Encoded()]++
+		}
+
+	}
+	//garbage collect unreferenced blobs
+	removed := 0
+	for blob, ref := range blobreferences {
+		if ref == 0 {
+			blobCacheStore.Del(blob)
+			fmt.Printf("%s [REMOVED]\n", blob)
+			removed++
+		}
+	}
+	fmt.Println("Removed", removed, "blobs")
+	return nil
+}
+
+func imageExport(reference string, dstFile string) error {
+	timestart := time.Now().UnixMilli()
+
+	ctx := context.Background()
+	ctx = context.WithValue(ctx, oci.IndexStoreContextKey, IndexStorePath)
+	ctx = context.WithValue(ctx, oci.BlobStoreContextKey, BlobStorePath)
+	log.Default().Printf("Retrieving %s from local cache...\n", reference)
+	ociImage, err := oci.GetLocalImage(ctx, reference)
+	if err != nil {
+		return err
+	}
+
+	log.Default().Printf("Exporting %s to %s...\n", reference, dstFile)
+	err = ociImage.GetExporter().ExportAsTar(dstFile)
+	if err != nil {
+		return err
+	}
+
+	timeend := time.Now().UnixMilli()
+	totTime := timeend - timestart
+	timeS := float64(float64(totTime) / 1000)
+
+	log.Default().Printf("Done!  ✅ (%fs)\n", timeS)
 
 	return nil
 }

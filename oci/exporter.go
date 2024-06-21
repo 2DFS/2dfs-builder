@@ -6,8 +6,11 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"time"
 
+	"github.com/briandowns/spinner"
 	"github.com/giobart/2dfs-builder/compress"
+	"github.com/giobart/2dfs-builder/filesystem"
 )
 
 type FieldExporter interface {
@@ -17,7 +20,12 @@ type FieldExporter interface {
 
 func (image *containerImage) ExportAsTar(path string) error {
 
+	s := spinner.New(spinner.CharSets[9], 100*time.Millisecond)
+	s.Start()
+
 	// create a temporary folder
+	s.Suffix = fmt.Sprintf("%s [EXPORTING...]\n", image.url)
+	s.Restart()
 	tmpFolder := filepath.Join(os.TempDir(), fmt.Sprintf("%x", sha256.Sum256([]byte(image.url))))
 	if _, err := os.Stat(tmpFolder); err == nil {
 		os.RemoveAll(tmpFolder)
@@ -44,6 +52,7 @@ func (image *containerImage) ExportAsTar(path string) error {
 	os.MkdirAll(shaFolder, os.ModePerm)
 
 	// copy manifest, config and layers
+	tdfslayer := ""
 	for i, manifest := range image.index.Manifests {
 		// copy manifest
 		manifestDigest := manifest.Digest.Encoded()
@@ -52,7 +61,7 @@ func (image *containerImage) ExportAsTar(path string) error {
 		if err != nil {
 			return err
 		}
-		fmt.Printf("%s [EXPORTED]\n", manifestDigest)
+		s.Suffix = fmt.Sprintf("%s [EXPORTED]\n", manifestDigest)
 
 		//copy config
 		configDigest := image.manifests[i].Config.Digest.Encoded()
@@ -61,7 +70,7 @@ func (image *containerImage) ExportAsTar(path string) error {
 		if err != nil {
 			return err
 		}
-		fmt.Printf("%s [EXPORTED]\n", configDigest)
+		s.Suffix = fmt.Sprintf("%s [EXPORTED]\n", configDigest)
 
 		//copy layers
 		for _, layer := range image.manifests[i].Layers {
@@ -71,24 +80,52 @@ func (image *containerImage) ExportAsTar(path string) error {
 			if err != nil {
 				return err
 			}
-			fmt.Printf("%s [EXPORTED]\n", layerDigest)
+			s.Suffix = fmt.Sprintf("%s [EXPORTED]\n", layerDigest)
+			if layer.MediaType == TwoDfsMediaType {
+				tdfslayer = layerDigest
+			}
 		}
 
 	}
 
-	//copy 2dfs
-	for allotment := range image.field.IterateAllotments() {
-		allotmentDigest := allotment.Digest
-		allotmentPath := filepath.Join(tmpFolder, "blobs", "sha256", allotmentDigest)
-		err = image.exportBlobByDigest(allotmentPath, allotmentDigest)
-		if err != nil {
-			return err
+	//update field if present
+	if image.field == nil {
+		if tdfslayer != "" {
+			fieldReader, err := image.blobCache.Get(tdfslayer)
+			if err != nil {
+				return err
+			}
+			defer fieldReader.Close()
+			fullField, err := io.ReadAll(fieldReader)
+			if err != nil {
+				return err
+			}
+			field, err := filesystem.GetField().Unmarshal(string(fullField[:]))
+			if err != nil {
+				return err
+			}
+			image.field = field
 		}
-		fmt.Printf("Field %d/%d [EXPORTED]\n", allotment.Row, allotment.Col)
 	}
+	//export 2dfs if necessary
+
+	if image.field != nil {
+		for allotment := range image.field.IterateAllotments() {
+			allotmentDigest := allotment.Digest
+			allotmentPath := filepath.Join(tmpFolder, "blobs", "sha256", allotmentDigest)
+			err = image.exportBlobByDigest(allotmentPath, allotmentDigest)
+			if err != nil {
+				return err
+			}
+			s.Suffix = fmt.Sprintf("Field %d/%d [EXPORTED]\n", allotment.Row, allotment.Col)
+		}
+	}
+	s.Stop()
 
 	// compress the folder
-	fmt.Printf("%s [COMPRESSING...]\n", fmt.Sprintf("%x", sha256.Sum256([]byte(image.url))))
+	s = spinner.New(spinner.CharSets[9], 100*time.Millisecond)
+	s.Suffix = fmt.Sprintf(" %s [COMPRESSING...]\n", fmt.Sprintf("%x", sha256.Sum256([]byte(image.url))))
+	s.Start()
 	archive, err := compress.CompressFolder(tmpFolder)
 	if err != nil {
 		return err
@@ -97,6 +134,7 @@ func (image *containerImage) ExportAsTar(path string) error {
 	if err != nil {
 		return err
 	}
+	s.Stop()
 
 	return copyFile(archivereader, path)
 }

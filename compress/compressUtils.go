@@ -103,7 +103,6 @@ func CompressFolder(fromPath string) (string, error) {
 	}
 
 	outFile.Seek(0, 0)
-	fmt.Printf("Compressed file digest: %s\n", CalculateSha256Digest(outFile))
 	return outFile.Name(), nil
 }
 

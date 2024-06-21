@@ -6,6 +6,7 @@ import (
 	"io"
 	"log"
 	"os"
+	"time"
 
 	"github.com/giobart/2dfs-builder/filesystem"
 	"github.com/giobart/2dfs-builder/oci"
@@ -13,7 +14,7 @@ import (
 )
 
 func init() {
-	buildCmd.Flags().StringVarP(&buildFile, "file", "f", "2dfs.json", "config file (default is .2dfs.json)")
+	buildCmd.Flags().StringVarP(&buildFile, "file", "f", "2dfs.json", "2dfs manifest file")
 	buildCmd.Flags().StringVar(&exportFormat, "as", "", "export format, supported formats: tar")
 	buildCmd.Flags().BoolVar(&forcePull, "force-pull", false, "force pull the base image")
 	rootCmd.AddCommand(buildCmd)
@@ -32,6 +33,8 @@ var buildCmd = &cobra.Command{
 }
 
 func build(imgFrom string, imgTarget string) error {
+	timestart := time.Now().UnixMilli()
+
 	bf, err := os.Open(buildFile)
 	if err != nil {
 		return err
@@ -81,5 +84,10 @@ func build(imgFrom string, imgTarget string) error {
 		}
 	}
 
+	timeend := time.Now().UnixMilli()
+	totTime := timeend - timestart
+	timeS := float64(float64(totTime) / 1000)
+
+	log.Default().Printf("Done!  ✅ (%fs)\n", timeS)
 	return nil
 }

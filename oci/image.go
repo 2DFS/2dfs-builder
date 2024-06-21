@@ -32,6 +32,8 @@ const (
 	BlobStoreContextKey contextKeyType = "blobStore"
 	// 2dfs media type
 	TwoDfsMediaType = "application/vnd.oci.image.layer.v1.2dfs.field"
+	// image name annotation
+	ImageNameAnnotation = "2dfs.image.name"
 )
 
 type containerImage struct {
@@ -218,6 +220,8 @@ func (c *containerImage) AddField(manifest filesystem.TwoDFsManifest, targetUrl 
 		defer fsWriter.Close()
 	}
 
+	c.updateImageInfo(targetUrl)
+
 	for i, manifest := range c.manifests {
 		// update manifest with new layer
 		c.manifests[i].Layers = append(manifest.Layers, v1.Descriptor{
@@ -225,6 +229,14 @@ func (c *containerImage) AddField(manifest filesystem.TwoDFsManifest, targetUrl 
 			Digest:    digest.Digest(fmt.Sprintf("sha256:%s", fsDigest)),
 			Size:      int64(len(marshalledFs)),
 		})
+		if c.manifests[i].Annotations != nil {
+			c.manifests[i].Annotations["org.opencontainers.image.url"] = fmt.Sprintf("https://%s/%s", c.registry, c.repository)
+			c.manifests[i].Annotations["org.opencontainers.image.version"] = c.tag
+		}
+		if c.index.Manifests[i].Annotations != nil {
+			c.index.Manifests[i].Annotations["org.opencontainers.image.url"] = fmt.Sprintf("https://%s/%s", c.registry, c.repository)
+			c.index.Manifests[i].Annotations["org.opencontainers.image.version"] = c.tag
+		}
 	}
 
 	// re-compute manifest digests and update index and caches
@@ -255,7 +267,7 @@ func (c *containerImage) AddField(manifest filesystem.TwoDFsManifest, targetUrl 
 	if err != nil {
 		return err
 	}
-	c.updateImageInfo(targetUrl)
+
 	c.indexCache.Del(fmt.Sprintf("%x", sha256.Sum256([]byte(c.url))))
 	indexWriter, err := c.indexCache.Add(fmt.Sprintf("%x", sha256.Sum256([]byte(c.url))))
 	if err != nil {

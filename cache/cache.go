@@ -22,6 +22,8 @@ type CacheStore interface {
 	Del(digest string)
 	// Check integrity based on digest
 	Check(digest string) bool
+	// List all entries in the store
+	List() []string
 }
 
 func NewCacheStore(path string) (CacheStore, error) {
@@ -78,4 +80,15 @@ func (b *cachestore) Check(digest string) bool {
 		return false
 	}
 	return true
+}
+
+func (b *cachestore) List() []string {
+	var entries []string
+	filepath.Walk(b.path, func(path string, info os.FileInfo, err error) error {
+		if !info.IsDir() {
+			entries = append(entries, info.Name())
+		}
+		return nil
+	})
+	return entries
 }

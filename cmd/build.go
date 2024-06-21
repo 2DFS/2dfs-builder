@@ -13,7 +13,7 @@ import (
 )
 
 func init() {
-	buildCmd.Flags().StringVar(&buildFile, "f", "2dfs.json", "config file (default is .2dfs.json)")
+	buildCmd.Flags().StringVarP(&buildFile, "file", "f", "2dfs.json", "config file (default is .2dfs.json)")
 	buildCmd.Flags().StringVar(&exportFormat, "as", "", "export format, supported formats: tar")
 	buildCmd.Flags().BoolVar(&forcePull, "force-pull", false, "force pull the base image")
 	rootCmd.AddCommand(buildCmd)

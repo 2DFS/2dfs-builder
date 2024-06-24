@@ -194,6 +194,8 @@ func GetLocalImage(ctx context.Context, reference string) (Image, error) {
 		if err != nil {
 			return nil, err
 		}
+		//delete field for current image
+		img.field = nil
 	}
 
 	return img, nil
@@ -602,7 +604,8 @@ func (c *containerImage) downloadAndCache(downloadDigest digest.Digest, mediaTyp
 	if err != nil {
 		return err
 	}
-	_, err = io.Copy(uploadWriter, readCloser)
+	copyBuffer := make([]byte, 1024*1024)
+	_, err = io.CopyBuffer(uploadWriter, readCloser, copyBuffer)
 	if err != nil {
 		c.blobCache.Del(downloadDigest.Encoded())
 		return err
@@ -633,6 +636,7 @@ func (c *containerImage) buildFiled(manifest filesystem.TwoDFsManifest) (filesys
 	//empty Field
 	f := filesystem.GetField()
 
+	copyBuffer := make([]byte, 1024*1024*100)
 	for _, a := range manifest.Allotments {
 		//create allotment folder
 		allotmentFolder := filepath.Join(tmpFolder, fmt.Sprintf("r%d-c%d", a.Row, a.Col))
@@ -658,7 +662,7 @@ func (c *containerImage) buildFiled(manifest filesystem.TwoDFsManifest) (filesys
 		}
 
 		//write allotment content
-		_, err = io.Copy(dst, src)
+		_, err = io.CopyBuffer(dst, src, copyBuffer)
 		dst.Close()
 		src.Close()
 		if err != nil {
@@ -685,7 +689,7 @@ func (c *containerImage) buildFiled(manifest filesystem.TwoDFsManifest) (filesys
 				return nil, err
 			}
 			archive.Seek(0, 0)
-			_, err = io.Copy(blobWriter, archive)
+			_, err = io.CopyBuffer(blobWriter, archive, copyBuffer)
 			blobWriter.Close()
 			archive.Close()
 			if err != nil {

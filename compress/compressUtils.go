@@ -33,6 +33,7 @@ func CompressFolder(fromPath string) (string, error) {
 	defer tarWriter.Close()
 
 	// Walk through the source directory
+	copyBuffer := make([]byte, 1024*1024)
 	err = filepath.Walk(fromPath, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
 			return err
@@ -78,7 +79,7 @@ func CompressFolder(fromPath string) (string, error) {
 			}
 			defer file.Close()
 
-			_, err = io.Copy(tarWriter, file)
+			_, err = io.CopyBuffer(tarWriter, file, copyBuffer)
 			if err != nil {
 				return err
 			}
@@ -124,6 +125,7 @@ func DecompressFolder(targzFilePath string, outputDirectory string) error {
 	// Create a new tar archive reader
 	tarReader := tar.NewReader(gzipReader)
 
+	copyBuffer := make([]byte, 1024*1024)
 	// Walk through the tar archive
 	for {
 		header, err := tarReader.Next()
@@ -161,7 +163,8 @@ func DecompressFolder(targzFilePath string, outputDirectory string) error {
 			if err != nil {
 				return err
 			}
-			if _, err := io.Copy(f, tarReader); err != nil {
+
+			if _, err := io.CopyBuffer(f, tarReader, copyBuffer); err != nil {
 				return err
 			}
 			f.Close()

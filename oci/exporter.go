@@ -119,6 +119,14 @@ func (image *containerImage) ExportAsTar(path string) error {
 			s.Suffix = fmt.Sprintf("Field %d/%d [EXPORTED]\n", allotment.Row, allotment.Col)
 		}
 	}
+
+	//add oci layout version
+	ociLayout := []byte(`{"imageLayoutVersion": "1.0.0"}`)
+	ociLayoutPath := filepath.Join(tmpFolder, "oci-layout")
+	err = os.WriteFile(ociLayoutPath, ociLayout, 0644)
+	if err != nil {
+		return err
+	}
 	s.Stop()
 
 	// compress the folder

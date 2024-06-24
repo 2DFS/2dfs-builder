@@ -1,1 +1,0 @@
-go run ../../builder.go -i "docker.io/library/ubuntu:20.04" | sudo ~/bin/buildctl build --local context=. --output type=oci > image.tar

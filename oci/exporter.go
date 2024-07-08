@@ -127,7 +127,6 @@ func (image *containerImage) ExportAsTar(path string) error {
 	if err != nil {
 		return err
 	}
-	s.Stop()
 
 	// compress the folder
 	s = spinner.New(spinner.CharSets[9], 100*time.Millisecond)

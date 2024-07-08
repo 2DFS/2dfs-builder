@@ -4,6 +4,7 @@ type Allotment struct {
 	Row      int    `json:"row"`
 	Col      int    `json:"col"`
 	Digest   string `json:"digest"`
+	DiffID   string `json:"diffid"`
 	FileName string `json:"filename"`
 }
 

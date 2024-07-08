@@ -311,3 +311,22 @@ func ReadManifest(manifestReader io.ReadCloser) (v1.Manifest, error) {
 	}
 	return manifestStruct, nil
 }
+
+func ReadConfig(configReader io.ReadCloser) (v1.Image, error) {
+	buffer := make([]byte, 1024)
+	fullread := []byte{}
+	for {
+		n, err := configReader.Read(buffer)
+		fullread = append(fullread, buffer[:n]...)
+		if err != nil {
+			break
+		}
+	}
+
+	configStruct := v1.Image{}
+	err := json.Unmarshal(fullread, &configStruct)
+	if err != nil {
+		return v1.Image{}, err
+	}
+	return configStruct, nil
+}

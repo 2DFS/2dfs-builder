@@ -50,6 +50,7 @@ type containerImage struct {
 	blobCache    cache.CacheStore
 	field        filesystem.Field
 	manifests    []v1.Manifest
+	configs      []v1.Image
 }
 
 type partition struct {
@@ -71,7 +72,7 @@ func NewImage(ctx context.Context, url string, forcepull bool) (Image, error) {
 	if ctxIndexPosition != nil {
 		indexStoreLocation = ctxIndexPosition.(string)
 	} else {
-		return nil, fmt.Errorf("Index store location not found in context")
+		return nil, fmt.Errorf("index store location not found in context")
 	}
 
 	ctxBlobPosition := ctx.Value(BlobStoreContextKey)
@@ -79,7 +80,7 @@ func NewImage(ctx context.Context, url string, forcepull bool) (Image, error) {
 	if ctxBlobPosition != nil {
 		blobStoreLocation = ctxBlobPosition.(string)
 	} else {
-		return nil, fmt.Errorf("Blob store location not found in context")
+		return nil, fmt.Errorf("blob store location not found in context")
 	}
 
 	imgstore, err := cache.NewCacheStore(indexStoreLocation)
@@ -95,6 +96,7 @@ func NewImage(ctx context.Context, url string, forcepull bool) (Image, error) {
 		indexCache: imgstore,
 		blobCache:  blobstore,
 		manifests:  []v1.Manifest{},
+		configs:    []v1.Image{},
 	}
 
 	err = img.loadIndex(url, ctx)
@@ -125,7 +127,7 @@ func GetLocalImage(ctx context.Context, reference string) (Image, error) {
 	if ctxIndexPosition != nil {
 		indexStoreLocation = ctxIndexPosition.(string)
 	} else {
-		return nil, fmt.Errorf("Index store location not found in context")
+		return nil, fmt.Errorf("index store location not found in context")
 	}
 
 	ctxBlobPosition := ctx.Value(BlobStoreContextKey)
@@ -133,7 +135,7 @@ func GetLocalImage(ctx context.Context, reference string) (Image, error) {
 	if ctxBlobPosition != nil {
 		blobStoreLocation = ctxBlobPosition.(string)
 	} else {
-		return nil, fmt.Errorf("Blob store location not found in context")
+		return nil, fmt.Errorf("blob store location not found in context")
 	}
 
 	imgstore, err := cache.NewCacheStore(indexStoreLocation)
@@ -405,21 +407,22 @@ func (c *containerImage) AddField(manifest filesystem.TwoDFsManifest, targetUrl 
 
 func (c *containerImage) partition() error {
 
-	partitionsHash := []string{}
+	partitionAllotment := []filesystem.Allotment{}
 
 	for i, manifest := range c.manifests {
 		filteredLayers := []v1.Descriptor{}
+		rootfsLayers := c.configs[i].RootFS
 		//removing 2dfs temporary layer if present
 		for _, layer := range manifest.Layers {
 			if layer.MediaType == TwoDfsMediaType {
 				//if 2dfs layer parse field and partition allotments
 				c.readField(layer.Digest.Encoded())
-				if len(partitionsHash) == 0 {
+				if len(partitionAllotment) == 0 {
 					if c.field != nil {
 						for allotment := range c.field.IterateAllotments() {
 							for _, p := range c.partitions {
 								if allotment.Row >= p.x1 && allotment.Row <= p.x2 && allotment.Col >= p.y1 && allotment.Col <= p.y2 {
-									partitionsHash = append(partitionsHash, allotment.Digest)
+									partitionAllotment = append(partitionAllotment, allotment)
 									//TODO remove duplicated
 								}
 							}
@@ -430,24 +433,29 @@ func (c *containerImage) partition() error {
 				filteredLayers = append(filteredLayers, layer)
 			}
 		}
-		if len(partitionsHash) > 0 {
+		if len(partitionAllotment) > 0 {
 			//adding partitioned layers
-			for _, p := range partitionsHash {
-				blobSize, err := c.blobCache.GetSize(p)
+			for _, p := range partitionAllotment {
+				blobSize, err := c.blobCache.GetSize(p.Digest)
 				if err != nil {
 					return err
 				}
-				fmt.Printf("Partition %s [CREATING]\n", p)
+				fmt.Printf("Partition %s [CREATING]\n", p.Digest)
 				filteredLayers = append(filteredLayers, v1.Descriptor{
 					MediaType: "application/vnd.oci.image.layer.v1.tar+gzip",
-					Digest:    digest.Digest(fmt.Sprintf("sha256:%s", p)),
+					Digest:    digest.Digest(fmt.Sprintf("sha256:%s", p.Digest)),
 					Size:      blobSize,
 				})
+				rootfsLayers.DiffIDs = append(rootfsLayers.DiffIDs, digest.Digest(fmt.Sprintf("sha256:%s", p.DiffID)))
 			}
 		} else {
 			return fmt.Errorf("no 2DFS partitions found. Make sure the image has format OCI+2DFS and that the partition matches the allotments")
 		}
 		c.manifests[i].Layers = filteredLayers
+		c.configs[i].RootFS = rootfsLayers
+
+		marshalledConfig, _ := json.Marshal(c.configs[i])
+		c.manifests[i].Config.Digest = digest.Digest(fmt.Sprintf("sha256:%x", sha256.Sum256(marshalledConfig)))
 	}
 
 	for i, _ := range c.index.Manifests {
@@ -456,7 +464,8 @@ func (c *containerImage) partition() error {
 			return err
 		}
 		manifestDigest := fmt.Sprintf("%x", sha256.Sum256(marshalledManifest))
-		// update manifest cache
+		configDigest := c.manifests[i].Config.Digest.Encoded()
+		// update manifest
 		if !c.blobCache.Check(manifestDigest) {
 			manifestWriter, err := c.blobCache.Add(manifestDigest)
 			if err != nil {
@@ -471,6 +480,23 @@ func (c *containerImage) partition() error {
 		} else {
 			fmt.Printf("%s [CACHED]\n", manifestDigest)
 		}
+		// update config
+		if !c.blobCache.Check(configDigest) {
+			configWriter, err := c.blobCache.Add(configDigest)
+			if err != nil {
+				return err
+			}
+			marshalledConfig, _ := json.Marshal(c.configs[i])
+			_, err = configWriter.Write(marshalledConfig)
+			if err != nil {
+				configWriter.Close()
+				return err
+			}
+			configWriter.Close()
+		} else {
+			fmt.Printf("%s [CACHED]\n", configDigest)
+		}
+
 		c.index.Manifests[i].Digest = digest.Digest(fmt.Sprintf("sha256:%s", manifestDigest))
 	}
 
@@ -526,6 +552,7 @@ func (c *containerImage) downloadManifests() error {
 }
 
 func (c *containerImage) downloadManifestBlobs(manifest v1.Manifest) error {
+
 	// download config blob
 	if manifest.Config.Digest.Algorithm() != digest.SHA256 {
 		return fmt.Errorf("unsupported digest algorithm: %s", manifest.Config.Digest.Algorithm().String())
@@ -534,10 +561,21 @@ func (c *containerImage) downloadManifestBlobs(manifest v1.Manifest) error {
 	if !configCached {
 		// blob not cached cached, downloading
 		c.downloadAndCache(manifest.Config.Digest, manifest.Config.MediaType)
-
 	} else {
 		log.Printf("%s [CACHED]", manifest.Config.Digest.Encoded())
 	}
+
+	// Load config from cache
+	configCachereader, err := c.blobCache.Get(manifest.Config.Digest.Encoded())
+	if err != nil {
+		return err
+	}
+	defer configCachereader.Close()
+	config, err := ReadConfig(configCachereader)
+	if err != nil {
+		return err
+	}
+	c.configs = append(c.configs, config)
 
 	// download layers
 	for _, layer := range manifest.Layers {
@@ -670,18 +708,29 @@ func (c *containerImage) buildFiled(manifest filesystem.TwoDFsManifest) (filesys
 		}
 
 		//compress allotment folder
-		archiveName, err := compress.CompressFolder(allotmentFolder)
+		tarFileName, err := compress.TarFolder(allotmentFolder)
 		if err != nil {
 			return nil, err
 		}
+		archiveName, err := compress.TarToGz(tarFileName)
+		if err != nil {
+			return nil, err
+		}
+		tarFile, err := os.Open(tarFileName)
+		if err != nil {
+			return nil, err
+		}
+		defer tarFile.Close()
 		archive, err := os.Open(archiveName)
 		if err != nil {
 			return nil, err
 		}
+		defer archive.Close()
 
 		//cache blob
 		archive.Seek(0, 0)
 		digest := compress.CalculateSha256Digest(archive)
+		digestTar := compress.CalculateSha256Digest(tarFile)
 		if !c.blobCache.Check(digest) {
 			blobWriter, err := c.blobCache.Add(digest)
 			if err != nil {
@@ -700,11 +749,11 @@ func (c *containerImage) buildFiled(manifest filesystem.TwoDFsManifest) (filesys
 		}
 
 		//add allotments
-
 		f.AddAllotment(filesystem.Allotment{
 			Row:      a.Row,
 			Col:      a.Col,
 			Digest:   digest,
+			DiffID:   digestTar,
 			FileName: dstPath,
 		})
 	}

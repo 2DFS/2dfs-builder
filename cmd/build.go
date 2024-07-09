@@ -77,7 +77,11 @@ func build(imgFrom string, imgTarget string) error {
 	if exportFormat != "" {
 		switch exportFormat {
 		case "tar":
-			err = ociImage.GetExporter().ExportAsTar("image.tar.gz")
+			exporter, err := ociImage.GetExporter()
+			if err != nil {
+				return err
+			}
+			err = exporter.ExportAsTar("image.tar.gz")
 			if err != nil {
 				return err
 			}

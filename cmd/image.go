@@ -7,6 +7,7 @@ import (
 	"io"
 	"log"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/giobart/2dfs-builder/cache"
@@ -25,10 +26,12 @@ func init() {
 	imageCmd.AddCommand(prune)
 	imageCmd.AddCommand(export)
 	export.Flags().StringVar(&exportFormat, "as", "", "export format, supported formats: tar")
+	export.Flags().StringVar(&platform, "platform", "", "select platform, e.g., linux/amd64 or linux/arm64. Default: multiplatform image")
 }
 
 var showHash bool
 var removeAll bool
+var platform string
 var imageCmd = &cobra.Command{
 	Use:   "image",
 	Short: "Commands to manage images",
@@ -245,6 +248,15 @@ func pruneBlobs() error {
 }
 
 func imageExport(reference string, dstFile string) error {
+	os, arch := "", ""
+	if platform != "" {
+		splitPlat := strings.Split(platform, "/")
+		if len(splitPlat) != 2 {
+			return fmt.Errorf("invalid platform format")
+		}
+		os = splitPlat[0]
+		arch = splitPlat[1]
+	}
 	timestart := time.Now().UnixMilli()
 
 	ctx := context.Background()
@@ -257,7 +269,11 @@ func imageExport(reference string, dstFile string) error {
 	}
 
 	log.Default().Printf("Exporting %s to %s...\n", reference, dstFile)
-	err = ociImage.GetExporter().ExportAsTar(dstFile)
+	exporter, err := ociImage.GetExporter(os, arch)
+	if err != nil {
+		return err
+	}
+	err = exporter.ExportAsTar(dstFile)
 	if err != nil {
 		return err
 	}

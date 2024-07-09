@@ -62,7 +62,7 @@ type partition struct {
 
 type Image interface {
 	AddField(manifest filesystem.TwoDFsManifest, targetImage string) error
-	GetExporter() FieldExporter
+	GetExporter(args ...string) (FieldExporter, error)
 }
 
 func NewImage(ctx context.Context, url string, forcepull bool) (Image, error) {
@@ -658,8 +658,30 @@ func (c *containerImage) downloadAndCache(downloadDigest digest.Digest, mediaTyp
 	return nil
 }
 
-func (c *containerImage) GetExporter() FieldExporter {
-	return c
+func (c *containerImage) GetExporter(args ...string) (FieldExporter, error) {
+	if len(args) == 2 {
+		os := args[0]
+		arch := args[1]
+		if os == "" || arch == "" {
+			return c, nil
+		}
+
+		selectedManifestIdx := -1
+		for i, manifest := range c.index.Manifests {
+			if manifest.Platform.OS == os && manifest.Platform.Architecture == arch {
+				selectedManifestIdx = i
+				break
+			}
+		}
+		if selectedManifestIdx == -1 {
+			return nil, fmt.Errorf("manifest not found for %s/%s", os, arch)
+		} else {
+			c.index.Manifests = []v1.Descriptor{c.index.Manifests[selectedManifestIdx]}
+			c.manifests = []v1.Manifest{c.manifests[selectedManifestIdx]}
+			fmt.Printf("Selected manifest %s/%s\n", os, arch)
+		}
+	}
+	return c, nil
 }
 
 func (c *containerImage) buildFiled(manifest filesystem.TwoDFsManifest) (filesystem.Field, error) {

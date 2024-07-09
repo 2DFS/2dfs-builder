@@ -1,6 +1,7 @@
 package oci
 
 import (
+	"encoding/json"
 	"fmt"
 	"io"
 	"os"
@@ -33,13 +34,11 @@ func (image *containerImage) ExportAsTar(path string) error {
 	defer os.RemoveAll(tmpFolder)
 
 	// copy index and blobs
-	indexPath := filepath.Join(tmpFolder, "index.json")
-	index, err := image.indexCache.Get(image.indexHash)
+	indexBytes, err := json.Marshal(image.index)
 	if err != nil {
 		return err
 	}
-	defer index.Close()
-	err = copyFile(index, indexPath)
+	err = os.WriteFile(filepath.Join(tmpFolder, "index.json"), indexBytes, 0644)
 	if err != nil {
 		return err
 	}

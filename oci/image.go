@@ -385,6 +385,10 @@ func (c *containerImage) AddField(manifest filesystem.TwoDFsManifest, targetUrl 
 			fmt.Printf("%s [CACHED]\n", manifestDigest)
 		}
 		c.index.Manifests[i].Digest = digest.Digest(fmt.Sprintf("sha256:%s", manifestDigest))
+		c.index.Manifests[i].Size, err = c.blobCache.GetSize(manifestDigest)
+		if err != nil {
+			return err
+		}
 	}
 
 	// update index cache
@@ -498,6 +502,10 @@ func (c *containerImage) partition() error {
 		}
 
 		c.index.Manifests[i].Digest = digest.Digest(fmt.Sprintf("sha256:%s", manifestDigest))
+		c.index.Manifests[i].Size, err = c.blobCache.GetSize(manifestDigest)
+		if err != nil {
+			return err
+		}
 	}
 
 	// update index cache

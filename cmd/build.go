@@ -17,12 +17,14 @@ func init() {
 	buildCmd.Flags().StringVarP(&buildFile, "file", "f", "2dfs.json", "2dfs manifest file")
 	buildCmd.Flags().StringVar(&exportFormat, "as", "", "export format, supported formats: tar")
 	buildCmd.Flags().BoolVar(&forcePull, "force-pull", false, "force pull the base image")
+	buildCmd.Flags().StringArrayVarP(&platfrorms, "platforms", "p", []string{}, "Filter the build platoforms. E.g. linux/amd64,linux/arm64. By default all the available platforms are used")
 	rootCmd.AddCommand(buildCmd)
 }
 
 var buildFile string
 var forcePull bool
 var exportFormat string
+var platfrorms []string
 var buildCmd = &cobra.Command{
 	Use:   "build [base image] [target image]",
 	Short: "Build a 2dfs field from an oci image link",
@@ -59,7 +61,7 @@ func build(imgFrom string, imgTarget string) error {
 	ctx = context.WithValue(ctx, oci.IndexStoreContextKey, IndexStorePath)
 	ctx = context.WithValue(ctx, oci.BlobStoreContextKey, BlobStorePath)
 	log.Default().Println("Getting Image")
-	ociImage, err := oci.NewImage(ctx, imgFrom, forcePull)
+	ociImage, err := oci.NewImage(ctx, imgFrom, forcePull, platfrorms)
 	if err != nil {
 		return err
 	}

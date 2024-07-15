@@ -44,6 +44,7 @@ type containerImage struct {
 	repository   string
 	tag          string
 	url          string
+	platforms    []string
 	partitions   []partition
 	partitionTag string
 	indexCache   cache.CacheStore
@@ -65,7 +66,12 @@ type Image interface {
 	GetExporter(args ...string) (FieldExporter, error)
 }
 
-func NewImage(ctx context.Context, url string, forcepull bool) (Image, error) {
+/*
+Get an image online or from cache.
+forcepull: force image pull even if local cache entry found
+platforms: array of supported platforms. The resulting image will only include support of those is the original image has it.
+*/
+func NewImage(ctx context.Context, url string, forcepull bool, platforms []string) (Image, error) {
 
 	ctxIndexPosition := ctx.Value(IndexStoreContextKey)
 	indexStoreLocation := ""
@@ -97,6 +103,7 @@ func NewImage(ctx context.Context, url string, forcepull bool) (Image, error) {
 		blobCache:  blobstore,
 		manifests:  []v1.Manifest{},
 		configs:    []v1.Image{},
+		platforms:  platforms,
 	}
 
 	err = img.loadIndex(url, ctx)
@@ -245,6 +252,8 @@ func (c *containerImage) loadIndex(url string, ctx context.Context) error {
 	}
 	index.Annotations[ImageNameAnnotation] = c.url
 	log.Default().Println("Index downloaded")
+
+	index = c.filterByPlatform(index)
 
 	// save index to cache
 	uploadWriter, err := c.indexCache.Add(c.indexHash)
@@ -853,4 +862,20 @@ func (c *containerImage) readField(fieldHash string) error {
 		c.field = field
 	}
 	return nil
+}
+
+func (c *containerImage) filterByPlatform(index v1.Index) v1.Index {
+	//filtering out unwanted platforms based on user filter
+	if len(c.platforms) > 0 {
+		manifestList := []v1.Descriptor{}
+		for _, manifest := range index.Manifests {
+			for _, plat := range c.platforms {
+				if fmt.Sprintf("%s/%s", manifest.Platform.OS, manifest.Platform.Architecture) == plat {
+					manifestList = append(manifestList, manifest)
+				}
+			}
+		}
+		index.Manifests = manifestList
+	}
+	return index
 }

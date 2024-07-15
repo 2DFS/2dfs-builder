@@ -56,6 +56,9 @@ func DownloadIndex(image OciImageLink) (v1.Index, error) {
 
 	client := http.DefaultClient
 	indexResult, err := client.Do(indexRequest)
+	if err != nil {
+		return v1.Index{}, err
+	}
 
 	// If the request is unauthorized, try to get a token and retry
 	// This works only if bearer was empty, thus auth was not attempted

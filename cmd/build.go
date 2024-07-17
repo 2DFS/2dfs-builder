@@ -60,6 +60,7 @@ func build(imgFrom string, imgTarget string) error {
 	ctx := context.Background()
 	ctx = context.WithValue(ctx, oci.IndexStoreContextKey, IndexStorePath)
 	ctx = context.WithValue(ctx, oci.BlobStoreContextKey, BlobStorePath)
+	ctx = context.WithValue(ctx, oci.KeyStoreContextKey, KeysStorePath)
 	log.Default().Println("Getting Image")
 	ociImage, err := oci.NewImage(ctx, imgFrom, forcePull, platfrorms)
 	if err != nil {
@@ -68,6 +69,7 @@ func build(imgFrom string, imgTarget string) error {
 	log.Default().Println("Image index retrieved")
 
 	// add 2dfs field to the image
+	buildstart := time.Now().UnixMilli()
 	log.Default().Println("Adding Field")
 	err = ociImage.AddField(twoDfsManifest, imgTarget)
 	if err != nil {
@@ -92,8 +94,11 @@ func build(imgFrom string, imgTarget string) error {
 
 	timeend := time.Now().UnixMilli()
 	totTime := timeend - timestart
+	buildTime := timeend - buildstart
 	timeS := float64(float64(totTime) / 1000)
+	timebuildS := float64(float64(buildTime) / 1000)
 
+	log.Default().Printf("Build completed  ⚒️ (%fs)\n", timebuildS)
 	log.Default().Printf("Done!  ✅ (%fs)\n", timeS)
 	return nil
 }

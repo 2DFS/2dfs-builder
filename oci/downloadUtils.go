@@ -24,6 +24,12 @@ type tokenResponse struct {
 	Token string `json:"token"`
 }
 
+var globalToken string = ""
+
+func DeleteToken() {
+	globalToken = ""
+}
+
 func DownloadIndex(image OciImageLink) (v1.Index, error) {
 
 	var bearer = ""
@@ -111,6 +117,10 @@ func ReadIndex(indexReader io.ReadCloser) (v1.Index, error) {
 
 func getToken(image OciImageLink) (string, error) {
 
+	if globalToken != "" {
+		return globalToken, nil
+	}
+
 	// Get Token at https://{registry}/token\?service\=\{registry}\&scope\="repository:{repository}:pull"
 	tokenRequest, err := http.NewRequest("GET", fmt.Sprintf("%s?service=%s&scope=repository:%s:pull", image.registryAuth, image.service, image.Repository), nil)
 	if err != nil {
@@ -148,6 +158,7 @@ func getToken(image OciImageLink) (string, error) {
 		return "", err
 	}
 
+	globalToken = token.Token
 	return token.Token, nil
 }
 

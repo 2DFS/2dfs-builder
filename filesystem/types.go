@@ -1,5 +1,7 @@
 package filesystem
 
+import "sync"
+
 type Allotment struct {
 	Row      int    `json:"row"`
 	Col      int    `json:"col"`
@@ -17,6 +19,7 @@ type TwoDFilesystem struct {
 	Rows    []Cols `json:"rows"`
 	TotRows int    `json:"rows_size"`
 	Owner   string `json:"owner"`
+	mtx     sync.Mutex
 }
 
 type AllotmentManifest struct {

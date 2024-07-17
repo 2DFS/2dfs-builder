@@ -192,6 +192,74 @@ func TarFolder(fromPath string) (string, error) {
 	return outFile.Name(), nil
 }
 
+// Creates a tar from a file
+func TarFile(src string, dst string) (string, error) {
+
+	tmpfilename := sha256.Sum256([]byte(src + ""))
+	tmpdir := os.TempDir()
+
+	// Open the output file for writing in gzip format
+	outFile, err := os.CreateTemp(tmpdir, fmt.Sprintf("%x", tmpfilename))
+	if err != nil {
+		return "", err
+	}
+	defer outFile.Close()
+
+	// Create a new tar archive writer
+	tarWriter := tar.NewWriter(outFile)
+	defer tarWriter.Close()
+
+	// Walk through the source directory
+	copyBuffer := make([]byte, 1024*1024)
+	info, err := os.Stat(src)
+	if err != nil {
+		return "", err
+	}
+
+	// Skip non regular files
+	if !info.Mode().IsRegular() {
+		return "", fmt.Errorf("The input is a non-regular file")
+	}
+
+	// Create a tar header for the current file/directory
+	header, err := tar.FileInfoHeader(info, info.Name())
+	if err != nil {
+		return "", err
+	}
+	header.AccessTime = time.Date(2000, 1, 1, 0, 0, 0, 0, time.UTC)
+	header.ChangeTime = time.Date(2000, 1, 1, 0, 0, 0, 0, time.UTC)
+	header.ModTime = time.Date(2000, 1, 1, 0, 0, 0, 0, time.UTC)
+
+	// Set the path within the tar archive to file name
+	header.Name = dst
+
+	// Write the header to the tar archive
+	if err := tarWriter.WriteHeader(header); err != nil {
+		return "", err
+	}
+
+	file, err := os.Open(src)
+	if err != nil {
+		return "", err
+	}
+	defer file.Close()
+
+	// copy file inside tar
+	_, err = io.CopyBuffer(tarWriter, file, copyBuffer)
+	if err != nil {
+		return "", err
+	}
+
+	// Flush the writer
+	tarWriter.Flush()
+	err = tarWriter.Close()
+	if err != nil {
+		return "", fmt.Errorf("failed flushing tar file: %w", err)
+	}
+
+	return outFile.Name(), nil
+}
+
 // Applies a gzip compression to a tar file
 func TarToGz(tarFilePath string) (string, error) {
 

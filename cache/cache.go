@@ -5,12 +5,14 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"sync"
 
 	"github.com/giobart/2dfs-builder/compress"
 )
 
 type cachestore struct {
 	path string // path to the blobstore directory
+	mtx  sync.Mutex
 }
 
 type CacheStore interface {
@@ -43,10 +45,13 @@ func NewCacheStore(path string) (CacheStore, error) {
 	}
 	return &cachestore{
 		path: path,
+		mtx:  sync.Mutex{},
 	}, nil
 }
 
 func (b *cachestore) Get(digest string) (io.ReadCloser, error) {
+	b.mtx.Lock()
+	defer b.mtx.Unlock()
 	dest := filepath.Join(b.path, digest)
 	openBlob, err := os.Open(dest)
 	if err != nil {
@@ -56,6 +61,8 @@ func (b *cachestore) Get(digest string) (io.ReadCloser, error) {
 }
 
 func (b *cachestore) GetSize(digest string) (int64, error) {
+	b.mtx.Lock()
+	defer b.mtx.Unlock()
 	dest := filepath.Join(b.path, digest)
 	stat, err := os.Stat(dest)
 	if err != nil {
@@ -65,6 +72,8 @@ func (b *cachestore) GetSize(digest string) (int64, error) {
 }
 
 func (b *cachestore) Add(digest string) (io.WriteCloser, error) {
+	b.mtx.Lock()
+	defer b.mtx.Unlock()
 	dest := filepath.Join(b.path, digest)
 	blobfile, err := os.Create(dest)
 	if err != nil {
@@ -74,6 +83,8 @@ func (b *cachestore) Add(digest string) (io.WriteCloser, error) {
 }
 
 func (b *cachestore) Del(digest string) {
+	b.mtx.Lock()
+	defer b.mtx.Unlock()
 	dest := filepath.Join(b.path, digest)
 	os.Remove(dest)
 }
@@ -94,6 +105,8 @@ func (b *cachestore) Check(digest string) bool {
 }
 
 func (b *cachestore) List() []string {
+	b.mtx.Lock()
+	defer b.mtx.Unlock()
 	var entries []string
 	filepath.Walk(b.path, func(path string, info os.FileInfo, err error) error {
 		if !info.IsDir() {

@@ -1,15 +1,21 @@
 package filesystem
 
-import "encoding/json"
+import (
+	"encoding/json"
+	"sync"
+)
 
 func GetField() Field {
 	return &TwoDFilesystem{
 		Rows:    make([]Cols, 0),
 		TotRows: 0,
+		mtx:     sync.Mutex{},
 	}
 }
 
 func (f *TwoDFilesystem) AddAllotment(allotment Allotment) Field {
+	f.mtx.Lock()
+	defer f.mtx.Unlock()
 	f.genAllotments(allotment.Row, allotment.Col)
 	f.Rows[allotment.Row].Allotments[allotment.Col].Digest = allotment.Digest
 	f.Rows[allotment.Row].Allotments[allotment.Col].DiffID = allotment.DiffID

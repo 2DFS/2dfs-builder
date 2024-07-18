@@ -3,7 +3,7 @@ Builder for 2DFS Images
 
 ## Build and Install `tdfs` cli
 
-Install the binary inside `~/bin/tdfs` using:
+Install the binary inside `~/bin/tdfs` (MacOS) or `~/.local/bin/tdfs` (Linux) using:
 
 ```
 ./install.sh
@@ -50,14 +50,39 @@ You can use this to export a tdfs image a oci image using semantic labeling.
 E.g., 
 
 ```
-tdfs export mytdfs:v1+0,0,1,1 image.tar.gz
+tdfs image export mytdfs:v1+0,0,1,1 image1.tar.gz
 ```
 This will export allotments (0,0),(0,1),(1,0),(1,1) as OCI layers. 
 
 ```
-tdfs export mytdfs:v1+0,0,0,0 image.tar.gz
+tdfs image export mytdfs:v1+0,0,0,0 image0.tar.gz
 ```
 This will export only allotment (0,0) as OCI layer. 
+
+## Run tdfs images in docker
+
+If you exported a partitioned image as tar.gz file, like e.g., `image1.tar.gz`.
+You can import it as a docker image using the docker load command:
+
+```
+docker load -i image1.tar.gz
+```
+The output should look like this
+```
+docker load -i image1.tar.gz                                                           125 ↵
+Loaded image ID: sha256:0ce9917ccee3aafde0de242f0261120108b54660e26e0956d5c15f5391c25259
+Loaded image ID: sha256:9e4c7ff570e356f784b918bab8c06ec730eb71e471e822d74bb73f4a3687f0b7
+Loaded image ID: sha256:d1af7cb720fabcfefd7ec6cb282060b2a6f152c21da4a3bac50a5a86a0f07a06
+Loaded image ID: sha256:6808b090f05171d053f93611e5061642b86a3a78717de2fcb4d73479a74f0085
+Loaded image ID: sha256:5287804c49232c73a570b4bc3e1cdcad306400db4f36ecea7673dabb1383c5f8
+```
+This command created 5 images, one for each of the supported platform fo the ubuntu:22.04 base image. 
+
+Then try and run this image as usual using the ID corresponding to your platform ID, e.g., 
+
+```
+docker run -it e254bc73d3bcd64864c5fad36aec4b487737ad406ac1175037552c01e570020b /bin/bash 
+```
 
 ## Semantic label syntax 
 
@@ -78,4 +103,14 @@ The semantic label `image:latest+x1,y1,x2,y2` will generate a partition such tha
 Smentic labels can be chained, e.g., `image:latest+x1,y1,x2,y2+x11,y11,x22,y22+...`
 and the result will be the union of all partitions. 
 
+## Platform selector
+
+When exporting your image you can select a custom target platform for the partitioned image using the `--platform <os/arc>` flag. 
+
+E.g., 
+```
+tdfs image export mytdfs:v1+0,0,0,0 imageamd64.tar.gz --platform linux/amd64
+```
+
+**N.b. If no platform is specified, the image exported image always includes all the available platforms of the base image**
 

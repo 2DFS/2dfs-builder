@@ -178,12 +178,22 @@ func pruneBlobs() error {
 	if err != nil {
 		return err
 	}
+	blobDigestCacheStore, err := cache.NewCacheStore(KeysStorePath)
+	if err != nil {
+		return err
+	}
 
 	//create reference counter for blobs
 	blobs := blobCacheStore.List()
+	digests := blobDigestCacheStore.List()
 	blobreferences := make(map[string]int)
+	digestreferences := make(map[string]int)
+
 	for _, blob := range blobs {
 		blobreferences[blob] = 0
+	}
+	for _, blodigest := range digests {
+		digestreferences[blodigest] = 0
 	}
 	indexes := indexCacheStore.List()
 	for _, index := range indexes {
@@ -227,6 +237,7 @@ func pruneBlobs() error {
 					}
 					for f := range tdfs.IterateAllotments() {
 						blobreferences[f.Digest]++
+						digestreferences[f.DiffID]++
 					}
 				}
 			}
@@ -240,6 +251,13 @@ func pruneBlobs() error {
 		if ref == 0 {
 			blobCacheStore.Del(blob)
 			fmt.Printf("%s [REMOVED]\n", blob)
+			removed++
+		}
+	}
+	for digest, ref := range digestreferences {
+		if ref == 0 {
+			blobDigestCacheStore.Del(digest)
+			fmt.Printf("%s [REMOVED]\n", digest)
 			removed++
 		}
 	}
@@ -262,6 +280,7 @@ func imageExport(reference string, dstFile string) error {
 	ctx := context.Background()
 	ctx = context.WithValue(ctx, oci.IndexStoreContextKey, IndexStorePath)
 	ctx = context.WithValue(ctx, oci.BlobStoreContextKey, BlobStorePath)
+	ctx = context.WithValue(ctx, oci.KeyStoreContextKey, KeysStorePath)
 	log.Default().Printf("Retrieving %s from local cache...\n", reference)
 	ociImage, err := oci.GetLocalImage(ctx, reference)
 	if err != nil {

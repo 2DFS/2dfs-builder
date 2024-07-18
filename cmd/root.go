@@ -19,6 +19,7 @@ var (
 	basePath       = path.Join(homeDir, ".2dfs")
 	BlobStorePath  = path.Join(basePath, "blobs")
 	IndexStorePath = path.Join(basePath, "index")
+	KeysStorePath  = path.Join(basePath, "uncompressed-keys")
 )
 
 func Execute() error {
@@ -40,6 +41,11 @@ func init() {
 	//check if basePath/blobstore exists if not create it
 	if _, err := os.Stat(BlobStorePath); os.IsNotExist(err) {
 		os.Mkdir(BlobStorePath, 0755)
+	}
+
+	//check if basePath/index exists if not create it
+	if _, err := os.Stat(KeysStorePath); os.IsNotExist(err) {
+		os.Mkdir(KeysStorePath, 0755)
 	}
 
 	//check if basePath/index exists if not create it

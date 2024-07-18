@@ -17,12 +17,14 @@ func init() {
 	buildCmd.Flags().StringVarP(&buildFile, "file", "f", "2dfs.json", "2dfs manifest file")
 	buildCmd.Flags().StringVar(&exportFormat, "as", "", "export format, supported formats: tar")
 	buildCmd.Flags().BoolVar(&forcePull, "force-pull", false, "force pull the base image")
+	buildCmd.Flags().StringArrayVarP(&platfrorms, "platforms", "p", []string{}, "Filter the build platoforms. E.g. linux/amd64,linux/arm64. By default all the available platforms are used")
 	rootCmd.AddCommand(buildCmd)
 }
 
 var buildFile string
 var forcePull bool
 var exportFormat string
+var platfrorms []string
 var buildCmd = &cobra.Command{
 	Use:   "build [base image] [target image]",
 	Short: "Build a 2dfs field from an oci image link",
@@ -58,14 +60,16 @@ func build(imgFrom string, imgTarget string) error {
 	ctx := context.Background()
 	ctx = context.WithValue(ctx, oci.IndexStoreContextKey, IndexStorePath)
 	ctx = context.WithValue(ctx, oci.BlobStoreContextKey, BlobStorePath)
+	ctx = context.WithValue(ctx, oci.KeyStoreContextKey, KeysStorePath)
 	log.Default().Println("Getting Image")
-	ociImage, err := oci.NewImage(ctx, imgFrom, forcePull)
+	ociImage, err := oci.NewImage(ctx, imgFrom, forcePull, platfrorms)
 	if err != nil {
 		return err
 	}
 	log.Default().Println("Image index retrieved")
 
 	// add 2dfs field to the image
+	buildstart := time.Now().UnixMilli()
 	log.Default().Println("Adding Field")
 	err = ociImage.AddField(twoDfsManifest, imgTarget)
 	if err != nil {
@@ -90,8 +94,11 @@ func build(imgFrom string, imgTarget string) error {
 
 	timeend := time.Now().UnixMilli()
 	totTime := timeend - timestart
+	buildTime := timeend - buildstart
 	timeS := float64(float64(totTime) / 1000)
+	timebuildS := float64(float64(buildTime) / 1000)
 
+	log.Default().Printf("Build completed  ⚒️ (%fs)\n", timebuildS)
 	log.Default().Printf("Done!  ✅ (%fs)\n", timeS)
 	return nil
 }

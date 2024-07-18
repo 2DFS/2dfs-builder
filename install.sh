@@ -1,3 +1,10 @@
+#!/usr/bin/env bash
+
 go get ./pkg/tdfs
 go build -o tdfs ./pkg/tdfs/tdfs.go
-mv tdfs ~/bin/tdfs
+
+if [ "$(uname)" == "Darwin" ]; then
+    mv tdfs ~/bin/tdfs     
+elif [ "$(expr substr $(uname -s) 1 5)" == "Linux" ]; then
+    mv tdfs ~/.local/bin/tdfs 
+fi

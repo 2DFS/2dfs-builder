@@ -31,6 +31,8 @@ const (
 	IndexStoreContextKey contextKeyType = "indexStore"
 	// BlobStoreContextKey is the context key for the blob store
 	BlobStoreContextKey contextKeyType = "blobStore"
+	// KeyStoreContextKey is the context key for the blob store
+	KeyStoreContextKey contextKeyType = "keyStore"
 	// 2dfs media type
 	TwoDfsMediaType = "application/vnd.oci.image.layer.v1.2dfs.field"
 	// image name annotation
@@ -38,19 +40,21 @@ const (
 )
 
 type containerImage struct {
-	index        v1.Index
-	indexHash    string
-	registry     string
-	repository   string
-	tag          string
-	url          string
-	partitions   []partition
-	partitionTag string
-	indexCache   cache.CacheStore
-	blobCache    cache.CacheStore
-	field        filesystem.Field
-	manifests    []v1.Manifest
-	configs      []v1.Image
+	index          v1.Index
+	indexHash      string
+	registry       string
+	repository     string
+	tag            string
+	url            string
+	platforms      []string
+	partitions     []partition
+	partitionTag   string
+	indexCache     cache.CacheStore
+	blobCache      cache.CacheStore
+	keyDigestCache cache.CacheStore
+	field          filesystem.Field
+	manifests      []v1.Manifest
+	configs        []v1.Image
 }
 
 type partition struct {
@@ -65,7 +69,12 @@ type Image interface {
 	GetExporter(args ...string) (FieldExporter, error)
 }
 
-func NewImage(ctx context.Context, url string, forcepull bool) (Image, error) {
+/*
+Get an image online or from cache.
+forcepull: force image pull even if local cache entry found
+platforms: array of supported platforms. The resulting image will only include support of those is the original image has it.
+*/
+func NewImage(ctx context.Context, url string, forcepull bool, platforms []string) (Image, error) {
 
 	ctxIndexPosition := ctx.Value(IndexStoreContextKey)
 	indexStoreLocation := ""
@@ -83,6 +92,14 @@ func NewImage(ctx context.Context, url string, forcepull bool) (Image, error) {
 		return nil, fmt.Errorf("blob store location not found in context")
 	}
 
+	ctxKeyPosition := ctx.Value(KeyStoreContextKey)
+	keyStoreLocation := ""
+	if ctxKeyPosition != nil {
+		keyStoreLocation = ctxKeyPosition.(string)
+	} else {
+		return nil, fmt.Errorf("key store location not found in context")
+	}
+
 	imgstore, err := cache.NewCacheStore(indexStoreLocation)
 	if err != nil {
 		return nil, err
@@ -91,12 +108,18 @@ func NewImage(ctx context.Context, url string, forcepull bool) (Image, error) {
 	if err != nil {
 		return nil, err
 	}
+	blobdigeststore, err := cache.NewCacheStore(keyStoreLocation)
+	if err != nil {
+		return nil, err
+	}
 
 	img := &containerImage{
-		indexCache: imgstore,
-		blobCache:  blobstore,
-		manifests:  []v1.Manifest{},
-		configs:    []v1.Image{},
+		indexCache:     imgstore,
+		blobCache:      blobstore,
+		keyDigestCache: blobdigeststore,
+		manifests:      []v1.Manifest{},
+		configs:        []v1.Image{},
+		platforms:      platforms,
 	}
 
 	err = img.loadIndex(url, ctx)
@@ -138,6 +161,14 @@ func GetLocalImage(ctx context.Context, reference string) (Image, error) {
 		return nil, fmt.Errorf("blob store location not found in context")
 	}
 
+	ctxKeyPosition := ctx.Value(KeyStoreContextKey)
+	keyStoreLocation := ""
+	if ctxKeyPosition != nil {
+		keyStoreLocation = ctxKeyPosition.(string)
+	} else {
+		return nil, fmt.Errorf("key store location not found in context")
+	}
+
 	imgstore, err := cache.NewCacheStore(indexStoreLocation)
 	if err != nil {
 		return nil, err
@@ -146,11 +177,16 @@ func GetLocalImage(ctx context.Context, reference string) (Image, error) {
 	if err != nil {
 		return nil, err
 	}
+	blobdigeststore, err := cache.NewCacheStore(keyStoreLocation)
+	if err != nil {
+		return nil, err
+	}
 
 	img := &containerImage{
-		indexCache: imgstore,
-		blobCache:  blobstore,
-		manifests:  []v1.Manifest{},
+		indexCache:     imgstore,
+		blobCache:      blobstore,
+		keyDigestCache: blobdigeststore,
+		manifests:      []v1.Manifest{},
 	}
 
 	idxReader, err := imgstore.Get(reference)
@@ -245,6 +281,8 @@ func (c *containerImage) loadIndex(url string, ctx context.Context) error {
 	}
 	index.Annotations[ImageNameAnnotation] = c.url
 	log.Default().Println("Index downloaded")
+
+	index = c.filterByPlatform(index)
 
 	// save index to cache
 	uploadWriter, err := c.indexCache.Add(c.indexHash)
@@ -586,22 +624,38 @@ func (c *containerImage) downloadManifestBlobs(manifest v1.Manifest) error {
 	c.configs = append(c.configs, config)
 
 	// download layers
+	success := make(chan bool, len(manifest.Layers))
 	for _, layer := range manifest.Layers {
-		if layer.Digest.Algorithm() != digest.SHA256 {
-			return fmt.Errorf("unsupported digest algorithm: %s", layer.Digest.Algorithm().String())
-		}
-		cached := c.blobCache.Check(layer.Digest.Encoded())
-		if !cached {
-			// blob not cached cached, downloading
-			// TODO: this can be parallelized!
-			err := c.downloadAndCache(layer.Digest, layer.MediaType)
-			if err != nil {
-				log.Printf("Error downloading layer: %v", err)
-				return err
+		go func() {
+			if layer.Digest.Algorithm() != digest.SHA256 {
+				log.Printf("ERROR: unsupported digest algorithm: %s", layer.Digest.Algorithm().String())
+				success <- false
+				return
 			}
-		} else {
-			log.Printf("%s [CACHED]", layer.Digest.Encoded())
+			cached := c.blobCache.Check(layer.Digest.Encoded())
+			if !cached {
+				// blob not cached cached, downloading
+				// TODO: this can be parallelized!
+				err := c.downloadAndCache(layer.Digest, layer.MediaType)
+				if err != nil {
+					log.Printf("Error downloading layer: %v", err)
+					success <- false
+					return
+				}
+			} else {
+				log.Printf("%s [CACHED]", layer.Digest.Encoded())
+			}
+			success <- true
+		}()
+	}
+	terminate := false
+	for i := 0; i < len(manifest.Layers); i++ {
+		if !<-success {
+			terminate = true
 		}
+	}
+	if terminate {
+		return fmt.Errorf("error during blob download")
 	}
 	return nil
 }
@@ -701,94 +755,119 @@ func (c *containerImage) buildFiled(manifest filesystem.TwoDFsManifest) (filesys
 	os.Mkdir(tmpFolder, 0755)
 	defer os.RemoveAll(tmpFolder)
 
-	//empty Field
+	//pupulate field with allotments
 	f := filesystem.GetField()
 
-	copyBuffer := make([]byte, 1024*1024*100)
+	success := make(chan bool, len(manifest.Allotments))
 	for _, a := range manifest.Allotments {
-		//create allotment folder
-		allotmentFolder := filepath.Join(tmpFolder, fmt.Sprintf("r%d-c%d", a.Row, a.Col))
-		os.Mkdir(allotmentFolder, 0755)
+		go func() {
+			err := c.buildAllotment(a, f)
+			if err != nil {
+				success <- false
+				log.Default().Printf("ERROR: %v\n", err)
+			} else {
+				success <- true
+			}
+		}()
+	}
+	terminate := false
+	for i := 0; i < len(manifest.Allotments); i++ {
+		if !<-success {
+			terminate = true
+		}
+	}
+	if terminate {
+		return nil, fmt.Errorf("error during allotment build procedure")
+	}
 
-		//create destination file
-		dstPath := a.Dst
-		//check if first characted or dstPath is a slash
-		if dstPath[0] == '/' {
-			dstPath = dstPath[1:]
-		}
-		dst, err := createFileWithDirs(filepath.Join(allotmentFolder, dstPath))
-		if err != nil {
-			return nil, err
-		}
-		fmt.Printf("File %s [COPY] \n", a.Src)
+	return f, nil
+}
 
-		//open source file
-		src, err := os.Open(a.Src)
-		if err != nil {
-			dst.Close()
-			return nil, err
-		}
+func (c *containerImage) buildAllotment(a filesystem.AllotmentManifest, f filesystem.Field) error {
+	// open source file
+	src, err := os.Open(a.Src)
+	if err != nil {
+		return err
+	}
+	defer src.Close()
 
-		//write allotment content
-		_, err = io.CopyBuffer(dst, src, copyBuffer)
-		dst.Close()
-		src.Close()
-		if err != nil {
-			return nil, err
-		}
+	tarPath, err := compress.TarFile(a.Src, a.Dst)
+	if err != nil {
+		return err
+	}
+	tarReader, err := os.Open(tarPath)
+	if err != nil {
+		return err
+	}
 
-		//compress allotment folder
-		tarFileName, err := compress.TarFolder(allotmentFolder)
+	digest := ""
+
+	uncompressedDigest := compress.CalculateSha256Digest(tarReader)
+	tarReader.Seek(0, 0)
+
+	//check if uncompressed allotment is already cached
+	allotmentPositionReader, err := c.keyDigestCache.Get(uncompressedDigest)
+	if err == nil {
+		defer allotmentPositionReader.Close()
+		log.Printf("File %s [CACHED] \n", a.Src)
+
+		compressedBlobIdBytes, err := io.ReadAll(allotmentPositionReader)
 		if err != nil {
-			return nil, err
+			log.Printf("File %s damaged cache [REMOVED] \n", a.Src)
+			c.keyDigestCache.Del(uncompressedDigest)
+			return err
 		}
-		archiveName, err := compress.TarToGz(tarFileName)
+		digest = string(compressedBlobIdBytes)
+	} else {
+		log.Printf("File %s [COPY] \n", a.Src)
+		archiveName, err := compress.TarToGz(tarPath)
 		if err != nil {
-			return nil, err
+			return err
 		}
-		tarFile, err := os.Open(tarFileName)
-		if err != nil {
-			return nil, err
-		}
-		defer tarFile.Close()
 		archive, err := os.Open(archiveName)
 		if err != nil {
-			return nil, err
+			return err
 		}
 		defer archive.Close()
+		digest = compress.CalculateSha256Digest(archive)
 
-		//cache blob
-		archive.Seek(0, 0)
-		digest := compress.CalculateSha256Digest(archive)
-		digestTar := compress.CalculateSha256Digest(tarFile)
+		//add uncompressed allotment cache reference
+		cacheDigestWriter, err := c.keyDigestCache.Add(uncompressedDigest)
+		if err != nil {
+			c.keyDigestCache.Del(uncompressedDigest)
+			return err
+		}
+		defer cacheDigestWriter.Close()
+		cacheDigestWriter.Write([]byte(digest))
+
 		if !c.blobCache.Check(digest) {
 			blobWriter, err := c.blobCache.Add(digest)
 			if err != nil {
-				archive.Close()
-				return nil, err
+				return err
 			}
 			archive.Seek(0, 0)
+			copyBuffer := make([]byte, 1024*1024*100)
 			_, err = io.CopyBuffer(blobWriter, archive, copyBuffer)
 			blobWriter.Close()
 			archive.Close()
 			if err != nil {
 				c.blobCache.Del(digest)
-				return nil, err
+				return err
 			}
-			fmt.Printf("Alltoment %d/%d %s [CREATED] \n", a.Row, a.Col, digest)
+			log.Printf("Alltoment %d/%d %s [CREATED] \n", a.Row, a.Col, digest)
 		}
-
-		//add allotments
-		f.AddAllotment(filesystem.Allotment{
-			Row:      a.Row,
-			Col:      a.Col,
-			Digest:   digest,
-			DiffID:   digestTar,
-			FileName: dstPath,
-		})
 	}
 
-	return f, nil
+	// add allotments
+	f.AddAllotment(filesystem.Allotment{
+		Row:      a.Row,
+		Col:      a.Col,
+		Digest:   digest,
+		DiffID:   uncompressedDigest,
+		FileName: a.Dst,
+	})
+
+	return nil
 }
 
 func createFileWithDirs(p string) (*os.File, error) {
@@ -853,4 +932,20 @@ func (c *containerImage) readField(fieldHash string) error {
 		c.field = field
 	}
 	return nil
+}
+
+func (c *containerImage) filterByPlatform(index v1.Index) v1.Index {
+	//filtering out unwanted platforms based on user filter
+	if len(c.platforms) > 0 {
+		manifestList := []v1.Descriptor{}
+		for _, manifest := range index.Manifests {
+			for _, plat := range c.platforms {
+				if fmt.Sprintf("%s/%s", manifest.Platform.OS, manifest.Platform.Architecture) == plat {
+					manifestList = append(manifestList, manifest)
+				}
+			}
+		}
+		index.Manifests = manifestList
+	}
+	return index
 }

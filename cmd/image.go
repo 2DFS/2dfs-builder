@@ -3,6 +3,7 @@ package cmd
 import (
 	"context"
 	"crypto/sha256"
+	"encoding/json"
 	"fmt"
 	"io"
 	"log"
@@ -156,7 +157,13 @@ func removeImages(args []string) error {
 		return err
 	}
 	if removeAll {
-		args = indexCacheStore.List()
+		//remove directory BlobStorePath
+		_ = os.RemoveAll(BlobStorePath)
+		//remove directory KeysStorePath
+		_ = os.RemoveAll(KeysStorePath)
+		//remove directory IndexStorePath
+		_ = os.RemoveAll(IndexStorePath)
+		return nil
 	}
 	//remove index
 	for _, arg := range args {
@@ -193,8 +200,19 @@ func pruneBlobs() error {
 		blobreferences[blob] = 0
 	}
 	for _, blodigest := range digests {
-		digestreferences[blodigest] = 0
+		reader, err := blobDigestCacheStore.Get(blodigest)
+		if err != nil {
+			return err
+		}
+		cachekeys, err := oci.ParseCacheKey(reader)
+		if err != nil {
+			return err
+		}
+		for _, k := range cachekeys.Keys {
+			digestreferences[k.DiffID] = 0
+		}
 	}
+
 	indexes := indexCacheStore.List()
 	for _, index := range indexes {
 		reader, err := indexCacheStore.Get(index)
@@ -254,10 +272,58 @@ func pruneBlobs() error {
 			removed++
 		}
 	}
+
+	//garbage collect unreferenced cache file keys
+	keys := blobDigestCacheStore.List()
+	for _, key := range keys {
+		err := func() error {
+			keyreader, err := blobDigestCacheStore.Get(key)
+			if err != nil {
+				return err
+			}
+			defer keyreader.Close()
+			cachekeys, err := oci.ParseCacheKey(keyreader)
+			if err != nil {
+				return err
+			}
+			newkeys := []oci.FileCacheKey{}
+			for _, k := range cachekeys.Keys {
+				if digestreferences[k.DiffID] != 0 {
+					newkeys = append(newkeys, k)
+				}
+			}
+			if len(newkeys) != len(cachekeys.Keys) {
+				blobDigestCacheStore.Del(key)
+				fmt.Printf("%s [REMOVED]\n", key)
+				if len(newkeys) >= 0 {
+					newkey := oci.CacheKeys{
+						Keys: newkeys,
+					}
+					newkeyBytes, err := json.Marshal(newkey)
+					if err != nil {
+						return err
+					}
+					newkeyReader, err := blobDigestCacheStore.Add(key)
+					if err != nil {
+						return err
+					}
+					defer newkeyReader.Close()
+					_, err = newkeyReader.Write(newkeyBytes)
+					if err != nil {
+						return err
+					}
+				}
+			}
+			return nil
+		}()
+		if err != nil {
+			return err
+		}
+	}
+
 	for digest, ref := range digestreferences {
 		if ref == 0 {
 			blobDigestCacheStore.Del(digest)
-			fmt.Printf("%s [REMOVED]\n", digest)
 			removed++
 		}
 	}

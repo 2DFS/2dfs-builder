@@ -11,6 +11,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 
 	"log"
 
@@ -55,6 +56,17 @@ type containerImage struct {
 	field          filesystem.Field
 	manifests      []v1.Manifest
 	configs        []v1.Image
+	cacheLock      sync.Mutex
+}
+
+type CacheKeys struct {
+	Keys []FileCacheKey `json:"keys"`
+}
+
+type FileCacheKey struct {
+	Destination   string `json:"destination"`
+	DiffID        string `json:"diffID"`
+	CompressedSha string `json:"compressedSha"`
 }
 
 type partition struct {
@@ -120,6 +132,7 @@ func NewImage(ctx context.Context, url string, forcepull bool, platforms []strin
 		manifests:      []v1.Manifest{},
 		configs:        []v1.Image{},
 		platforms:      platforms,
+		cacheLock:      sync.Mutex{},
 	}
 
 	err = img.loadIndex(url, ctx)
@@ -187,6 +200,7 @@ func GetLocalImage(ctx context.Context, reference string) (Image, error) {
 		blobCache:      blobstore,
 		keyDigestCache: blobdigeststore,
 		manifests:      []v1.Manifest{},
+		cacheLock:      sync.Mutex{},
 	}
 
 	idxReader, err := imgstore.Get(reference)
@@ -365,6 +379,7 @@ func (c *containerImage) AddField(manifest filesystem.TwoDFsManifest, targetUrl 
 
 	// if new fs, write it to cache
 	if !c.blobCache.Check(fsDigest) {
+		fmt.Printf("Field %s [CREATED]\n", fsDigest)
 		fsWriter, err := c.blobCache.Add(fsDigest)
 		if err != nil {
 			return err
@@ -791,35 +806,51 @@ func (c *containerImage) buildAllotment(a filesystem.AllotmentManifest, f filesy
 	}
 	defer src.Close()
 
-	tarPath, err := compress.TarFile(a.Src, a.Dst)
-	if err != nil {
-		return err
-	}
-	tarReader, err := os.Open(tarPath)
-	if err != nil {
-		return err
-	}
+	fileSha := compress.CalculateSha256Digest(src)
+	src.Seek(0, 0)
 
-	digest := ""
+	compressedSha, diffID := func() (string, string) {
+		c.cacheLock.Lock()
+		defer c.cacheLock.Unlock()
+		keyDigestReader, err := c.keyDigestCache.Get(fileSha)
+		// check if item is cached
+		if err == nil {
+			defer keyDigestReader.Close()
+			cacheKeys, err := ParseCacheKey(keyDigestReader)
+			if err != nil {
+				log.Fatal(err)
+			}
+			diffID, compressedSha, err := GetFileSha(cacheKeys, a.Dst)
+			if err == nil {
+				log.Printf("File %s [CACHED] \n", a.Src)
+				return compressedSha, diffID
+			} else {
+				log.Printf("%v", err)
+				log.Printf("File %s no cache entry found \n", a.Src)
+			}
+		}
+		return "", ""
+	}()
 
-	uncompressedDigest := compress.CalculateSha256Digest(tarReader)
-	tarReader.Seek(0, 0)
+	// if no cache entry found, generate one
+	if compressedSha == "" {
+		log.Printf("File %s [COPY] \n", a.Src)
 
-	//check if uncompressed allotment is already cached
-	allotmentPositionReader, err := c.keyDigestCache.Get(uncompressedDigest)
-	if err == nil {
-		defer allotmentPositionReader.Close()
-		log.Printf("File %s [CACHED] \n", a.Src)
-
-		compressedBlobIdBytes, err := io.ReadAll(allotmentPositionReader)
+		tarPath, err := compress.TarFile(a.Src, a.Dst)
 		if err != nil {
-			log.Printf("File %s damaged cache [REMOVED] \n", a.Src)
-			c.keyDigestCache.Del(uncompressedDigest)
 			return err
 		}
-		digest = string(compressedBlobIdBytes)
-	} else {
-		log.Printf("File %s [COPY] \n", a.Src)
+		tarReader, err := os.Open(tarPath)
+		if err != nil {
+			return err
+		}
+		defer tarReader.Close()
+
+		diffID = compress.CalculateSha256Digest(tarReader)
+		tarReader.Seek(0, 0)
+
+		log.Printf("File %s [COMPRESSING] \n", a.Src)
+
 		archiveName, err := compress.TarToGz(tarPath)
 		if err != nil {
 			return err
@@ -829,19 +860,19 @@ func (c *containerImage) buildAllotment(a filesystem.AllotmentManifest, f filesy
 			return err
 		}
 		defer archive.Close()
-		digest = compress.CalculateSha256Digest(archive)
+		compressedSha = compress.CalculateSha256Digest(archive)
 
 		//add uncompressed allotment cache reference
-		cacheDigestWriter, err := c.keyDigestCache.Add(uncompressedDigest)
-		if err != nil {
-			c.keyDigestCache.Del(uncompressedDigest)
-			return err
-		}
-		defer cacheDigestWriter.Close()
-		cacheDigestWriter.Write([]byte(digest))
+		c.cacheLock.Lock()
+		c.upsertCacheKey(fileSha, FileCacheKey{
+			Destination:   a.Dst,
+			DiffID:        diffID,
+			CompressedSha: compressedSha,
+		})
+		c.cacheLock.Unlock()
 
-		if !c.blobCache.Check(digest) {
-			blobWriter, err := c.blobCache.Add(digest)
+		if !c.blobCache.Check(compressedSha) {
+			blobWriter, err := c.blobCache.Add(compressedSha)
 			if err != nil {
 				return err
 			}
@@ -851,10 +882,10 @@ func (c *containerImage) buildAllotment(a filesystem.AllotmentManifest, f filesy
 			blobWriter.Close()
 			archive.Close()
 			if err != nil {
-				c.blobCache.Del(digest)
+				c.blobCache.Del(compressedSha)
 				return err
 			}
-			log.Printf("Alltoment %d/%d %s [CREATED] \n", a.Row, a.Col, digest)
+			log.Printf("Alltoment %d/%d %s [CREATED] \n", a.Row, a.Col, compressedSha)
 		}
 	}
 
@@ -862,8 +893,8 @@ func (c *containerImage) buildAllotment(a filesystem.AllotmentManifest, f filesy
 	f.AddAllotment(filesystem.Allotment{
 		Row:      a.Row,
 		Col:      a.Col,
-		Digest:   digest,
-		DiffID:   uncompressedDigest,
+		Digest:   compressedSha,
+		DiffID:   diffID,
 		FileName: a.Dst,
 	})
 
@@ -948,4 +979,62 @@ func (c *containerImage) filterByPlatform(index v1.Index) v1.Index {
 		index.Manifests = manifestList
 	}
 	return index
+}
+
+func (c *containerImage) upsertCacheKey(fileSha string, cacheFile FileCacheKey) error {
+
+	keyDigestReader, err := c.keyDigestCache.Get(fileSha)
+	cachekey := CacheKeys{
+		Keys: []FileCacheKey{},
+	}
+	// if cache entry found, read it so we can append the new key
+	if err == nil {
+		cachekey, err = ParseCacheKey(keyDigestReader)
+		if err != nil {
+			keyDigestReader.Close()
+			return err
+		}
+		keyDigestReader.Close()
+		c.keyDigestCache.Del(fileSha)
+	}
+
+	cachekey.Keys = append(cachekey.Keys, cacheFile)
+	cachewriter, err := c.keyDigestCache.Add(fileSha)
+	if err != nil {
+		return err
+	}
+	defer cachewriter.Close()
+	cacheKeyBytes, err := json.Marshal(cachekey)
+	if err != nil {
+		return err
+	}
+	_, err = cachewriter.Write(cacheKeyBytes)
+	if err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func ParseCacheKey(reader io.Reader) (CacheKeys, error) {
+	var cacheKey CacheKeys
+	cacheKeyBytes, err := io.ReadAll(reader)
+	if err != nil {
+		return cacheKey, err
+	}
+	err = json.Unmarshal(cacheKeyBytes, &cacheKey)
+	if err != nil {
+		return cacheKey, err
+	}
+	return cacheKey, nil
+}
+
+// Given the file destination, and the CacheKeys, looks if any of the keys match the destination and returns the key and the sha of the file. Error otherwise.
+func GetFileSha(keys CacheKeys, dst string) (string, string, error) {
+	for _, key := range keys.Keys {
+		if key.Destination == dst {
+			return key.DiffID, key.CompressedSha, nil
+		}
+	}
+	return "", "", fmt.Errorf("file not found in cache")
 }

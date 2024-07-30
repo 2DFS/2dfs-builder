@@ -11,46 +11,31 @@ from utils.utils import *
 REPEAT = 5
 COOLDOWN = 10 #SECONDS
 EXPERIMENT_ALLOTMENT_RATIO = [
-    #{
-    #    "size": 500,
-    #    "allotments": 2,
-    #    "change": 1
-    #},
-    #{
-    #    "size": 100,
-    #    "allotments": 10,
-    #    "change": 5
-    #},
-    #{
-    #    "size": 10,
-    #    "allotments": 100,
-    #    "change": 1
-    #},
-    #{
-    #    "size": 5,
-    #    "allotments": 200,
-    #    "change": 1
-    #},
     {
-        "size": 10,
-        "allotments": 100,
-        "change": 1
+        "size": 1000,
+        "allotments": 1
+    },
+    {
+        "size": 500,
+        "allotments": 2
+    },
+    {
+        "size": 100,
+        "allotments": 10
     },
     {
         "size": 10,
-        "allotments": 100,
-        "change": 10
+        "allotments": 100
     },
     {
-        "size": 10,
-        "allotments": 100,
-        "change": 50
+        "size": 200,
+        "allotments": 5
     }
 ]
 
 if __name__ == "__main__":
     csvoutput = [
-        ["tool","allotments","size","changed","tot","download","layering"]
+        ["tool","allotments","size","tot","partitioning"]
     ]
     cleanup_tdfs()
     cleanup_docker()
@@ -81,16 +66,11 @@ if __name__ == "__main__":
             result = build_tdfs()
             total, download_time, layering_time = parse_tdfs_output(result)
             print("Total time: ",total, "Download time", download_time, "Layering time", layering_time)
-            print("Change allotments...")
-            for j in range(e["change"]):
-                filename = "files/f"+str(j)
-                os.remove(filename)
-                create_random_file(e["size"], filename)
-            print("Warm build...")
-            result = build_tdfs()
-            total, download_time, layering_time = parse_tdfs_output(result)
-            print("Total time: ",total, "Download time", download_time, "Layering time", layering_time)
-            csvoutput.append(["tdfs",e["allotments"],e["size"],e["change"],total,download_time,layering_time])
+            print("Export ...")
+            result = export_tdfs("0,0,"+str(e["allotments"])+","+str(e["allotments"]))
+            total, partitioning = parse_tdfs_export(result)
+            print("Total time: ",total, "Partitioning", partitioning)
+            csvoutput.append(["tdfs",e["allotments"],e["size"],total,partitioning])
             cleanup_tdfs()
 
             ## DOCKER EXPERIMENT
@@ -100,16 +80,11 @@ if __name__ == "__main__":
             result = build_docker()
             total, download_time, layering_time = parse_docker_output(result)
             print("Total time: ",total, "Download time", download_time, "Layering time", layering_time)
-            print("Change allotments...")
-            for j in range(e["change"]):
-                filename = "files/f"+str(j)
-                os.remove(filename)
-                create_random_file(e["size"], filename)
             print("Warm build...")
-            result = build_docker()
+            result = export_docker()
             total, download_time, layering_time = parse_docker_output(result)
             print("Total time: ",total, "Download time", download_time, "Layering time", layering_time)
-            csvoutput.append(["docker",e["allotments"],e["size"],e["change"],total,download_time,layering_time])
+            csvoutput.append(["docker",e["allotments"],e["size"],total,0])
             cleanup_docker()
 
 

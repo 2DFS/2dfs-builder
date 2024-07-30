@@ -477,6 +477,10 @@ func (c *containerImage) partition() error {
 				if len(partitionAllotment) == 0 {
 					if c.field != nil {
 						for allotment := range c.field.IterateAllotments() {
+							//skip empty allotments
+							if allotment.Digest == "" {
+								continue
+							}
 							for _, p := range c.partitions {
 								if allotment.Row >= p.x1 && allotment.Row <= p.x2 && allotment.Col >= p.y1 && allotment.Col <= p.y2 {
 									partitionAllotment = append(partitionAllotment, allotment)

@@ -71,9 +71,17 @@ def build_tdfs():
    cmd = ["time","tdfs", "build", "ubuntu:22.04","test:v1","--platforms", "linux/amd64"]
    return exec_command(cmd)
 
+def export_tdfs(partition):
+   cmd = ["time","tdfs", "image", "export","docker.io/library/test:v1+"+str(partition),"--platform", "linux/amd64","files/image.tar.gz"]
+   return exec_command(cmd)
+
 def build_docker():
    cmd = ["time","docker", "build", "-t","test:v1","."]
    return exec_command(cmd)
+
+def export_docker():
+    cmd = ["time","docker","save","-o","files/imagedocker.tar.gz","test:v1"]
+    return exec_command(cmd)
 
 def exec_command(command):
     try:
@@ -110,6 +118,26 @@ def cleanup_tdfs():
 def cleanup_docker():
     cmd = ["docker", "system", "prune","-a","-f"]
     exec_command(cmd)
+
+def parse_tdfs_export(output):
+    total = 0
+    begin_time = 0
+    partitioning = 0
+    for line in output.split("\n"):
+        linearr = line.split(" ")
+        for i,token in enumerate(linearr):
+            # extract total time
+            if "elapsed" in token:
+                #remove elapsed from token
+                token = token.replace("elapsed","")
+                total = parse_time_output(token)
+            # extract experiment begin time
+            if "Retrieving" in token:
+                begin_time = parse_time_to_millis(linearr[i-1])
+            if "Exporting" in token:
+                partitioning = parse_time_to_millis(linearr[i-1])-begin_time
+
+    return total, partitioning
 
 def parse_tdfs_output(output):
     total = 0

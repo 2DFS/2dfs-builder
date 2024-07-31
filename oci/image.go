@@ -78,7 +78,7 @@ type partition struct {
 
 type Image interface {
 	AddField(manifest filesystem.TwoDFsManifest, targetImage string) error
-	GetIndex() v1.Index
+	GetIndex() []byte
 	GetExporter(args ...string) (FieldExporter, error)
 }
 
@@ -463,8 +463,13 @@ func (c *containerImage) AddField(manifest filesystem.TwoDFsManifest, targetUrl 
 	return nil
 }
 
-func (c *containerImage) GetIndex() v1.Index {
-	return c.index
+func (c *containerImage) GetIndex() []byte {
+	index, err := json.Marshal(c.index)
+	if err != nil {
+		log.Printf("Error marshalling index: %v", err)
+		return nil
+	}
+	return index
 }
 
 func (c *containerImage) partition() error {

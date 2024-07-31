@@ -78,6 +78,7 @@ type partition struct {
 
 type Image interface {
 	AddField(manifest filesystem.TwoDFsManifest, targetImage string) error
+	GetIndex() v1.Index
 	GetExporter(args ...string) (FieldExporter, error)
 }
 
@@ -460,6 +461,10 @@ func (c *containerImage) AddField(manifest filesystem.TwoDFsManifest, targetUrl 
 		return err
 	}
 	return nil
+}
+
+func (c *containerImage) GetIndex() v1.Index {
+	return c.index
 }
 
 func (c *containerImage) partition() error {

@@ -1,9 +1,12 @@
 package oci
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
+	"net/http"
 	"os"
 	"path/filepath"
 	"time"
@@ -11,11 +14,12 @@ import (
 	"github.com/briandowns/spinner"
 	"github.com/giobart/2dfs-builder/compress"
 	"github.com/giobart/2dfs-builder/filesystem"
+	v1 "github.com/opencontainers/image-spec/specs-go/v1"
 )
 
 type FieldExporter interface {
 	ExportAsTar(dst string) error
-	Upload(OciImageLink) error
+	Upload() error
 }
 
 func (image *containerImage) ExportAsTar(path string) error {
@@ -144,7 +148,18 @@ func (image *containerImage) ExportAsTar(path string) error {
 	return copyFile(archivereader, path)
 }
 
-func (e *containerImage) Upload(link OciImageLink) error {
+func (image *containerImage) Upload() error {
+	s := spinner.New(spinner.CharSets[9], 100*time.Millisecond)
+	s.Start()
+
+	// Start Index Upload
+	s.Suffix = fmt.Sprintf("%s [Uploading...]\n", image.url)
+	s.Restart()
+	err := image.uploadIndex()
+	if err != nil {
+		return err
+	}
+
 	return nil
 }
 
@@ -169,5 +184,70 @@ func copyFile(src io.ReadCloser, dst string) error {
 	defer dstF.Close()
 
 	io.Copy(dstF, src)
+	return nil
+}
+
+func (image *containerImage) uploadIndex() error {
+
+	indexBytes, err := json.Marshal(image.index)
+	if err != nil {
+		return err
+	}
+
+	url := fmt.Sprintf("https://%s/v2/%s:%s/index.json", image.url, image.repository, image.partitionTag)
+	req, err := http.NewRequest("PUT", url, bytes.NewReader(indexBytes))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", v1.MediaTypeImageIndex)
+
+	response, err := http.DefaultClient.Do(req)
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer response.Body.Close()
+
+	log.Println("Index Upload Status: ", response.Status)
+	return nil
+
+}
+
+func (image *containerImage) uploadManifests() error {
+	for i, manifest := range image.index.Manifests {
+		manifestDigest := manifest.Digest.Encoded()
+		configDigest := image.manifests[i].Config.Digest.Encoded()
+		image.postByDigest(v1.MediaTypeImageManifest, manifestDigest)
+		image.postByDigest(v1.MediaTypeImageManifest, configDigest)
+
+		//TODO: use reader to perform upload
+	}
+	return nil
+}
+
+func (e *containerImage) uploadBlobs() error {
+	return nil
+}
+
+func (image *containerImage) postByDigest(mediaType string, digest string) error {
+	switch mediaType {
+	case v1.MediaTypeImageManifest:
+		log.Default().Println("Upload Manifest")
+		manifestReader, err := image.blobCache.Get(digest)
+		if err != nil {
+			return err
+		}
+		defer manifestReader.Close()
+		return nil
+	case v1.MediaTypeImageConfig:
+		log.Default().Println("Upload Config")
+		manifestReader, err := image.blobCache.Get(digest)
+		if err != nil {
+			return err
+		}
+		defer manifestReader.Close()
+		return nil
+	default:
+		log.Default().Println("Blob")
+	}
 	return nil
 }

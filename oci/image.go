@@ -38,6 +38,12 @@ const (
 	TwoDfsMediaType = "application/vnd.oci.image.layer.v1.2dfs.field"
 	// image name annotation
 	ImageNameAnnotation = "2dfs.image.name"
+	//semantic tag partition init char
+	partitionInit = `--`
+	//semantic tag partition split char
+	partitionSplitChar = `.`
+	//semantic partition regex patter
+	semanticTagPattern = partitionInit + `\d+\` + partitionSplitChar + `\d+\` + partitionSplitChar + `\d+\` + partitionSplitChar + `\d+`
 )
 
 type containerImage struct {
@@ -346,15 +352,16 @@ func (c *containerImage) updateImageInfo(url string) {
 	c.tag = "latest"
 	if len(tagAndRepo) == 2 {
 		c.tag = tagAndRepo[1]
+		c.partitionTag = c.tag //default partition tag is the tag itself, even without partitions
 		c.repository = tagAndRepo[0]
-		if strings.Contains(c.tag, "+") {
+		re := regexp.MustCompile(semanticTagPattern)
+		matches := re.FindAllString(c.tag, -1)
+		if len(matches) > 0 {
 			//semantic tag with partition
 			fmt.Printf("Semantic tag with partition detected %s\n", c.tag)
-			c.partitionTag = c.tag
-			tagAndPartitions := strings.Split(c.tag, "+")
-			c.tag = tagAndPartitions[0]
-			for _, p := range tagAndPartitions[1:] {
-				part, err := parsePartition(p)
+			c.tag = strings.Split(c.tag, partitionInit)[0]
+			for _, p := range matches {
+				part, err := parsePartition(strings.Replace(p, partitionInit, "", -1))
 				if err != nil {
 					fmt.Printf("[WARNING] Invalid partition %s, skipping...\n", p)
 					continue
@@ -616,7 +623,7 @@ func (c *containerImage) downloadManifests() error {
 			return err
 		}
 		defer manifestCachereader.Close()
-		manifest, err := ReadManifest(manifestCachereader)
+		manifest, _, _, err := ReadManifest(manifestCachereader)
 		if err != nil {
 			return err
 		}
@@ -934,7 +941,7 @@ func createFileWithDirs(p string) (*os.File, error) {
 }
 
 func parsePartition(p string) (partition, error) {
-	parts := strings.Split(p, ",")
+	parts := strings.Split(p, partitionSplitChar)
 	result := partition{}
 	if len(parts) != 4 {
 		return result, fmt.Errorf("invalid partition %s", p)

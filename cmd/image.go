@@ -28,6 +28,7 @@ func init() {
 	imageCmd.AddCommand(export)
 	export.Flags().StringVar(&exportFormat, "as", "", "export format, supported formats: tar")
 	export.Flags().StringVar(&platform, "platform", "", "select platform, e.g., linux/amd64 or linux/arm64. Default: multiplatform image")
+	imageCmd.AddCommand(push)
 }
 
 var showHash bool
@@ -67,6 +68,15 @@ var export = &cobra.Command{
 	Args:  cobra.ExactArgs(2),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		return imageExport(args[0], args[1])
+	},
+}
+
+var push = &cobra.Command{
+	Use:   "push [reference]",
+	Short: "push image to the registry",
+	Args:  cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		return imagePush(args[0])
 	},
 }
 
@@ -128,7 +138,7 @@ func listImages() error {
 		if err != nil {
 			return err
 		}
-		manifest, err := oci.ReadManifest(blobReader)
+		manifest, _, _, err := oci.ReadManifest(blobReader)
 		blobReader.Close()
 		if err != nil {
 			return err
@@ -232,7 +242,7 @@ func pruneBlobs() error {
 			if err != nil {
 				return err
 			}
-			manifest, err := oci.ReadManifest(manifestReader)
+			manifest, _, _, err := oci.ReadManifest(manifestReader)
 			manifestReader.Close()
 			if err != nil {
 				return err
@@ -359,6 +369,47 @@ func imageExport(reference string, dstFile string) error {
 		return err
 	}
 	err = exporter.ExportAsTar(dstFile)
+	if err != nil {
+		return err
+	}
+
+	timeend := time.Now().UnixMilli()
+	totTime := timeend - timestart
+	timeS := float64(float64(totTime) / 1000)
+
+	log.Default().Printf("Done!  ✅ (%fs)\n", timeS)
+
+	return nil
+}
+
+func imagePush(reference string) error {
+	os, arch := "", ""
+	if platform != "" {
+		splitPlat := strings.Split(platform, "/")
+		if len(splitPlat) != 2 {
+			return fmt.Errorf("invalid platform format")
+		}
+		os = splitPlat[0]
+		arch = splitPlat[1]
+	}
+	timestart := time.Now().UnixMilli()
+
+	ctx := context.Background()
+	ctx = context.WithValue(ctx, oci.IndexStoreContextKey, IndexStorePath)
+	ctx = context.WithValue(ctx, oci.BlobStoreContextKey, BlobStorePath)
+	ctx = context.WithValue(ctx, oci.KeyStoreContextKey, KeysStorePath)
+	log.Default().Printf("Retrieving %s from local cache...\n", reference)
+	ociImage, err := oci.GetLocalImage(ctx, reference)
+	if err != nil {
+		return err
+	}
+
+	log.Default().Printf("Pushing %s...\n", reference)
+	exporter, err := ociImage.GetExporter(os, arch)
+	if err != nil {
+		return err
+	}
+	err = exporter.Upload()
 	if err != nil {
 		return err
 	}

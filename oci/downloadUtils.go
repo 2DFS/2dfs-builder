@@ -2,6 +2,7 @@ package oci
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -82,7 +83,32 @@ func DownloadIndex(image OciImageLink) (v1.Index, error) {
 		return DownloadIndex(image)
 	}
 	if indexResult.StatusCode != http.StatusOK {
-		return v1.Index{}, fmt.Errorf("error getting index: %d", indexResult.StatusCode)
+		// try getting manifest directly for compatibility with single arch images
+		manifestreader, err := DownloadManifest(image, image.Tag)
+		if err != nil {
+			return v1.Index{}, fmt.Errorf("error getting index: %d", indexResult.StatusCode)
+		}
+		defer manifestreader.Close()
+		manifest, msize, mdigest, err := ReadManifest(manifestreader)
+		if err != nil {
+			return v1.Index{}, fmt.Errorf("error getting manifest: %d", err)
+		}
+		//return index with manifest as single element
+		parsedDigest, err := digest.Parse(mdigest)
+		if err != nil {
+			return v1.Index{}, err
+		}
+		return v1.Index{
+			MediaType: v1.MediaTypeImageIndex,
+			Manifests: []v1.Descriptor{
+				{
+					MediaType: v1.MediaTypeImageManifest,
+					Digest:    parsedDigest,
+					Size:      msize,
+					Platform:  manifest.Config.Platform,
+				},
+			},
+		}, nil
 	}
 	if err != nil {
 		return v1.Index{}, err
@@ -91,6 +117,9 @@ func DownloadIndex(image OciImageLink) (v1.Index, error) {
 	index, err := ReadIndex(indexResult.Body)
 	if index.MediaType != v1.MediaTypeImageIndex {
 		return v1.Index{}, fmt.Errorf("invalid index media type: %s", index.MediaType)
+	}
+	if err != nil {
+		return v1.Index{}, err
 	}
 
 	return index, nil
@@ -307,7 +336,8 @@ func DownloadManifest(image OciImageLink, digest string) (io.ReadCloser, error) 
 	return manifestResult.Body, nil
 }
 
-func ReadManifest(manifestReader io.ReadCloser) (v1.Manifest, error) {
+// ReadManifest returns manifest struct, manifest size, manifest digest
+func ReadManifest(manifestReader io.ReadCloser) (v1.Manifest, int64, string, error) {
 	buffer := make([]byte, 1024)
 	fullread := []byte{}
 	for {
@@ -321,9 +351,10 @@ func ReadManifest(manifestReader io.ReadCloser) (v1.Manifest, error) {
 	manifestStruct := v1.Manifest{}
 	err := json.Unmarshal(fullread, &manifestStruct)
 	if err != nil {
-		return v1.Manifest{}, err
+		return v1.Manifest{}, 0, "", err
 	}
-	return manifestStruct, nil
+	digest := sha256.Sum256(fullread)
+	return manifestStruct, int64(len(fullread)), fmt.Sprintf("sha256:%x", digest), nil
 }
 
 func ReadConfig(configReader io.ReadCloser) (v1.Image, error) {

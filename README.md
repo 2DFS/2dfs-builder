@@ -50,12 +50,12 @@ You can use this to export a tdfs image a oci image using semantic labeling.
 E.g., 
 
 ```
-tdfs image export mytdfs:v1+0,0,1,1 image1.tar.gz
+tdfs image export mytdfs:v1--0.0.1.1 image1.tar.gz
 ```
 This will export allotments (0,0),(0,1),(1,0),(1,1) as OCI layers. 
 
 ```
-tdfs image export mytdfs:v1+0,0,0,0 image0.tar.gz
+tdfs image export mytdfs:v1--0.0.0.0 image0.tar.gz
 ```
 This will export only allotment (0,0) as OCI layer. 
 
@@ -96,11 +96,11 @@ Given the following 3x3 field
 
 ```
 
-The semantic label `image:latest+x1,y1,x2,y2` will generate a partition such that:
+The semantic label `image:latest--x1.y1.x2.y2` will generate a partition such that:
 
 **allotment (a) in Field (F) iff := a.row>=x1 & a.row <= x2 & a.col>=y1 & a.col<=y2** 
 
-Smentic labels can be chained, e.g., `image:latest+x1,y1,x2,y2+x11,y11,x22,y22+...`
+Smentic labels can be chained, e.g., `image:latest--x1.y1.x2.y2--x11.y11.x22.y22--...`
 and the result will be the union of all partitions. 
 
 ## Platform selector
@@ -109,7 +109,7 @@ When exporting your image you can select a custom target platform for the partit
 
 E.g., 
 ```
-tdfs image export mytdfs:v1+0,0,0,0 imageamd64.tar.gz --platform linux/amd64
+tdfs image export mytdfs:v1--0.0.0.0 imageamd64.tar.gz --platform linux/amd64
 ```
 
 **N.b. If no platform is specified, the image exported image always includes all the available platforms of the base image**

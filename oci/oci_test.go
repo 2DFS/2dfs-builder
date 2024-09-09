@@ -114,7 +114,7 @@ func TestDownloadManifest(t *testing.T) {
 	}
 	defer manifestReader.Close()
 
-	manifest, err := ReadManifest(manifestReader)
+	manifest, _, _, err := ReadManifest(manifestReader)
 
 	if err != nil {
 		t.Errorf("ReadManifest error: %v", err)

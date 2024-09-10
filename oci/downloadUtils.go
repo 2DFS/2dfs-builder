@@ -110,9 +110,6 @@ func DownloadIndex(image OciImageLink) (v1.Index, error) {
 			},
 		}, nil
 	}
-	if err != nil {
-		return v1.Index{}, err
-	}
 
 	index, err := ReadIndex(indexResult.Body)
 	if index.MediaType != v1.MediaTypeImageIndex {
@@ -269,9 +266,6 @@ func DownloadBlob(ctx context.Context, image OciImageLink, digest digest.Digest,
 	}
 	if blobResult.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("error getting blob: %d", blobResult.StatusCode)
-	}
-	if err != nil {
-		return nil, err
 	}
 
 	return blobResult.Body, nil

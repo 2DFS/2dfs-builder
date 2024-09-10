@@ -67,13 +67,13 @@ func UploadIndex(image OciImageLink, content []byte) error {
 	if indexResult.StatusCode != http.StatusOK {
 		return fmt.Errorf("error getting index: %d", indexResult.StatusCode)
 	}
-	if err != nil {
-		return err
-	}
 
 	index, err := ReadIndex(indexResult.Body)
 	if index.MediaType != v1.MediaTypeImageIndex {
 		return fmt.Errorf("invalid index media type: %s", index.MediaType)
+	}
+	if err != nil {
+		return err
 	}
 
 	return nil
@@ -130,9 +130,6 @@ func UploadBlob(ctx context.Context, image OciImageLink, digest digest.Digest, m
 	}
 	if blobResult.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("error getting blob: %d", blobResult.StatusCode)
-	}
-	if err != nil {
-		return nil, err
 	}
 
 	return blobResult.Body, nil

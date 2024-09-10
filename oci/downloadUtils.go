@@ -98,6 +98,16 @@ func DownloadIndex(image OciImageLink) (v1.Index, error) {
 		if err != nil {
 			return v1.Index{}, err
 		}
+		fmt.Printf("manifest: %v\n", manifest)
+		platform := manifest.Config.Platform
+		if platform == nil {
+			//default platform
+			platform = &v1.Platform{
+				Architecture: "amd64",
+				OS:           "linux",
+			}
+		}
+
 		return v1.Index{
 			MediaType: v1.MediaTypeImageIndex,
 			Manifests: []v1.Descriptor{
@@ -105,7 +115,7 @@ func DownloadIndex(image OciImageLink) (v1.Index, error) {
 					MediaType: v1.MediaTypeImageManifest,
 					Digest:    parsedDigest,
 					Size:      msize,
-					Platform:  manifest.Config.Platform,
+					Platform:  platform,
 				},
 			},
 		}, nil

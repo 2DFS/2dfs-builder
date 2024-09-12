@@ -29,6 +29,7 @@ func init() {
 	export.Flags().StringVar(&exportFormat, "as", "", "export format, supported formats: tar")
 	export.Flags().StringVar(&platform, "platform", "", "select platform, e.g., linux/amd64 or linux/arm64. Default: multiplatform image")
 	imageCmd.AddCommand(push)
+	push.Flags().BoolVar(&forceHttp, "force-http", false, "force pull via http")
 }
 
 var showHash bool
@@ -399,6 +400,10 @@ func imagePush(reference string) error {
 	ctx = context.WithValue(ctx, oci.BlobStoreContextKey, BlobStorePath)
 	ctx = context.WithValue(ctx, oci.KeyStoreContextKey, KeysStorePath)
 	log.Default().Printf("Retrieving %s from local cache...\n", reference)
+
+	if forceHttp {
+		oci.PullPushProtocol = "http"
+	}
 	ociImage, err := oci.GetLocalImage(ctx, reference)
 	if err != nil {
 		return err

@@ -17,12 +17,14 @@ func init() {
 	buildCmd.Flags().StringVarP(&buildFile, "file", "f", "2dfs.json", "2dfs manifest file")
 	buildCmd.Flags().StringVar(&exportFormat, "as", "", "export format, supported formats: tar")
 	buildCmd.Flags().BoolVar(&forcePull, "force-pull", false, "force pull the base image")
+	buildCmd.Flags().BoolVar(&forceHttp, "force-http", false, "force pull via http")
 	buildCmd.Flags().StringArrayVarP(&platfrorms, "platforms", "p", []string{}, "Filter the build platoforms. E.g. linux/amd64,linux/arm64. By default all the available platforms are used")
 	rootCmd.AddCommand(buildCmd)
 }
 
 var buildFile string
 var forcePull bool
+var forceHttp bool
 var exportFormat string
 var platfrorms []string
 var buildCmd = &cobra.Command{
@@ -62,6 +64,10 @@ func build(imgFrom string, imgTarget string) error {
 	ctx = context.WithValue(ctx, oci.BlobStoreContextKey, BlobStorePath)
 	ctx = context.WithValue(ctx, oci.KeyStoreContextKey, KeysStorePath)
 	log.Default().Println("Getting Image")
+	oci.PullPushProtocol = "https"
+	if forceHttp {
+		oci.PullPushProtocol = "http"
+	}
 	ociImage, err := oci.NewImage(ctx, imgFrom, forcePull, platfrorms)
 	if err != nil {
 		return err

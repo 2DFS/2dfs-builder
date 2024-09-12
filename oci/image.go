@@ -46,6 +46,8 @@ const (
 	semanticTagPattern = partitionInit + `\d+\` + partitionSplitChar + `\d+\` + partitionSplitChar + `\d+\` + partitionSplitChar + `\d+`
 )
 
+var PullPushProtocol = "https"
+
 type containerImage struct {
 	index          v1.Index
 	indexHash      string
@@ -332,7 +334,7 @@ func (c *containerImage) updateImageInfo(url string) {
 		c.registry = "docker.io"
 		c.repository = url
 	} else {
-		registryRegex := regexp.MustCompile(`\b([a-z]+)\.?\s*(?:\b([a-z]+)\.?\s*)*`)
+		registryRegex := regexp.MustCompile(`\b([a-z,\d,:]+)\.?\s*(?:\b([a-z]+)\.?\s*)*`)
 		registry := urlParts[0]
 		c.repository = fmt.Sprintf(urlParts[1])
 		if registryRegex.FindStringIndex(registry) == nil {

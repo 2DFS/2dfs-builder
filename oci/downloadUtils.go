@@ -49,7 +49,7 @@ func DownloadIndex(image OciImageLink) (v1.Index, error) {
 	}
 
 	// Get Manifest at https://{registry}/v2/{repository}/manifests/{tag}
-	indexRequest, err := http.NewRequest("GET", fmt.Sprintf("https://%s/v2/%s/manifests/%s", image.Registry, image.Repository, image.Tag), nil)
+	indexRequest, err := http.NewRequest("GET", fmt.Sprintf("%s://%s/v2/%s/manifests/%s", PullPushProtocol, image.Registry, image.Repository, image.Tag), nil)
 	if err != nil {
 		return v1.Index{}, err
 	}
@@ -98,7 +98,6 @@ func DownloadIndex(image OciImageLink) (v1.Index, error) {
 		if err != nil {
 			return v1.Index{}, err
 		}
-		fmt.Printf("manifest: %v\n", manifest)
 		platform := manifest.Config.Platform
 		if platform == nil {
 			//default platform
@@ -151,14 +150,18 @@ func ReadIndex(indexReader io.ReadCloser) (v1.Index, error) {
 	return indexStruct, nil
 }
 
-func getToken(image OciImageLink) (string, error) {
+func getToken(image OciImageLink, additionalPermissions ...string) (string, error) {
 
 	if globalToken != "" {
 		return globalToken, nil
 	}
+	permissionString := "pull"
+	for _, permission := range additionalPermissions {
+		permissionString += "," + permission
+	}
 
 	// Get Token at https://{registry}/token\?service\=\{registry}\&scope\="repository:{repository}:pull"
-	tokenRequest, err := http.NewRequest("GET", fmt.Sprintf("%s?service=%s&scope=repository:%s:pull", image.registryAuth, image.service, image.Repository), nil)
+	tokenRequest, err := http.NewRequest("GET", fmt.Sprintf("%s?service=%s&scope=repository:%s:%s", image.registryAuth, image.service, image.Repository, permissionString), nil)
 	if err != nil {
 		return "", err
 	}

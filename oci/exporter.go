@@ -155,7 +155,7 @@ func (image *containerImage) Upload() error {
 	// Start Index Upload
 	s.Suffix = fmt.Sprintf("%s [Uploading...]\n", image.url)
 	s.Restart()
-	err := image.uploadIndex()
+	_, err := image.uploadIndex(OciImageLink{})
 	if err != nil {
 		return err
 	}
@@ -187,19 +187,32 @@ func copyFile(src io.ReadCloser, dst string) error {
 	return nil
 }
 
-func (image *containerImage) uploadIndex() error {
+// Upload the index to the registry and retunrs the upload token used
+func (image *containerImage) uploadIndex(link OciImageLink) (string, error) {
+
+	// Authenticate only if registryAuth and service are provided
+	bearer := ""
+	if link.registryAuth != "" && link.service != "" {
+		token, err := getToken(link, "push")
+		if err != nil {
+			return "", err
+		}
+
+		bearer = "Bearer " + token
+	}
 
 	indexBytes, err := json.Marshal(image.index)
 	if err != nil {
-		return err
+		return "", err
 	}
 
-	url := fmt.Sprintf("https://%s/v2/%s:%s/index.json", image.url, image.repository, image.partitionTag)
+	url := fmt.Sprintf("%s://%s/v2/%s/manifests/%s", PullPushProtocol, image.registry, image.repository, image.partitionTag)
 	req, err := http.NewRequest("PUT", url, bytes.NewReader(indexBytes))
 	if err != nil {
-		return err
+		return "", err
 	}
 	req.Header.Set("Content-Type", v1.MediaTypeImageIndex)
+	req.Header.Add("Authorization", bearer)
 
 	response, err := http.DefaultClient.Do(req)
 	if err != nil {
@@ -207,8 +220,25 @@ func (image *containerImage) uploadIndex() error {
 	}
 	defer response.Body.Close()
 
+	// If the request is unauthorized, try to get a token and retry
+	// This works only if bearer was empty, thus auth was not attempted
+	if response.StatusCode == http.StatusUnauthorized || response.StatusCode == 403 && link.registryAuth == "" {
+		authHeader := response.Header[http.CanonicalHeaderKey("WWW-Authenticate")]
+		fmt.Println(response.Header)
+		if len(authHeader) == 0 {
+			return "", fmt.Errorf("error pushing index: %d, with auth header:%v", response.StatusCode, authHeader)
+		}
+		realm, service := parseWWWAuthenticate(authHeader)
+		if realm == "" || service == "" {
+			return "", fmt.Errorf("error pushing index: %d", response.StatusCode)
+		}
+		link.service = service
+		link.registryAuth = realm
+		return image.uploadIndex(link)
+	}
+
 	log.Println("Index Upload Status: ", response.Status)
-	return nil
+	return bearer, nil
 
 }
 

@@ -29,7 +29,7 @@ func UploadIndex(image OciImageLink, content []byte) error {
 	}
 
 	// Get Manifest at https://{registry}/v2/{repository}/manifests/{tag}
-	indexRequest, err := http.NewRequest("PUT", fmt.Sprintf("https://%s/v2/%s/manifests/%s", image.Registry, image.Repository, image.Tag), bytes.NewBuffer(content))
+	indexRequest, err := http.NewRequest("PUT", fmt.Sprintf("%s://%s/v2/%s/manifests/%s", PullPushProtocol, image.Registry, image.Repository, image.Tag), bytes.NewBuffer(content))
 	if err != nil {
 		return err
 	}

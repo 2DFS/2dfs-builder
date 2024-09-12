@@ -41,6 +41,18 @@ func checkAllotments(row int, n int, f Field, t *testing.T) {
 	if f.(*TwoDFilesystem).Rows[row].TotAllotments != actualAllotmentsSize {
 		t.Fatalf("Allotments size should match f.Row[row].TotAllotments, expected %d actual %d", f.(*TwoDFilesystem).TotRows, actualAllotmentsSize)
 	}
+
+	//check if row/col match
+	//access all rows
+	for i := 0; i < len(f.(*TwoDFilesystem).Rows); i++ {
+		cols := f.(*TwoDFilesystem).Rows[i]
+		for c := 0; c < len(cols.Allotments); c++ {
+			if cols.Allotments[c].Row != i || cols.Allotments[c].Col != c {
+				t.Fatalf("expected row %d col %d, actual row %d col %d", i, c, cols.Allotments[c].Row, cols.Allotments[c].Col)
+			}
+		}
+	}
+
 }
 
 func isTheSame(f1 Field, f2 Field, t *testing.T) {

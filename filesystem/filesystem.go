@@ -60,7 +60,7 @@ func (f *TwoDFilesystem) genAllotments(row int, n int) {
 		for i := f.Rows[row].TotAllotments; i <= n; i++ {
 			f.Rows[row].Allotments = append(f.Rows[row].Allotments, Allotment{
 				Row:    row,
-				Col:    n,
+				Col:    i,
 				Digest: "",
 				DiffID: "",
 			})

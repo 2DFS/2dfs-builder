@@ -107,7 +107,7 @@ func DownloadIndex(image OciImageLink) (v1.Index, error) {
 			}
 		}
 
-		return v1.Index{
+		idx := v1.Index{
 			MediaType: v1.MediaTypeImageIndex,
 			Manifests: []v1.Descriptor{
 				{
@@ -117,7 +117,9 @@ func DownloadIndex(image OciImageLink) (v1.Index, error) {
 					Platform:  platform,
 				},
 			},
-		}, nil
+		}
+		idx.SchemaVersion = 2
+		return idx, nil
 	}
 
 	index, err := ReadIndex(indexResult.Body)

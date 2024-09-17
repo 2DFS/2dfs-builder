@@ -293,7 +293,7 @@ func (c *containerImage) loadIndex(url string, ctx context.Context) error {
 	index, err := DownloadIndex(OciImageLink{
 		Registry:   c.registry,
 		Repository: c.repository,
-		Tag:        c.tag,
+		Reference:  c.tag,
 	})
 	if err != nil {
 		return err
@@ -712,7 +712,7 @@ func (c *containerImage) downloadAndCache(downloadDigest digest.Digest, mediaTyp
 			OciImageLink{
 				Registry:   c.registry,
 				Repository: c.repository,
-				Tag:        c.tag,
+				Reference:  c.tag,
 			},
 			downloadDigest.String(),
 		)
@@ -726,7 +726,7 @@ func (c *containerImage) downloadAndCache(downloadDigest digest.Digest, mediaTyp
 			OciImageLink{
 				Registry:   c.registry,
 				Repository: c.repository,
-				Tag:        c.tag,
+				Reference:  c.tag,
 			},
 			downloadDigest,
 			mediaType,

@@ -220,6 +220,7 @@ func (image *containerImage) uploadIndex(link OciImageLink) error {
 func (e *containerImage) uploadBlobs(link OciImageLink) error {
 	s := spinner.New(spinner.CharSets[9], 100*time.Millisecond)
 	s.Start()
+	var tdfsFilesystemDigest string = ""
 
 	// Upload manifest layers
 	for _, manifest := range e.manifests {
@@ -235,6 +236,11 @@ func (e *containerImage) uploadBlobs(link OciImageLink) error {
 			if err != nil {
 				return err
 			}
+
+			if layerMediaType == TwoDfsMediaType {
+				tdfsFilesystemDigest = layerDigest
+			}
+
 		}
 	}
 
@@ -250,6 +256,34 @@ func (e *containerImage) uploadBlobs(link OciImageLink) error {
 		err := e.postByBlobDigest(link, v1.MediaTypeImageConfig, configDigest, int(manifest.Config.Size))
 		if err != nil {
 			return err
+		}
+	}
+
+	// Upload allotments
+	if tdfsFilesystemDigest != "" {
+		fieldReader, err := e.blobCache.Get(tdfsFilesystemDigest)
+		if err != nil {
+			return err
+		}
+		defer fieldReader.Close()
+		fieldBytes, err := io.ReadAll(fieldReader)
+		if err != nil {
+			return err
+		}
+		field, err := filesystem.GetField().Unmarshal(string(fieldBytes[:]))
+		if err != nil {
+			return err
+		}
+		e.field = field
+		for allotment := range e.field.IterateAllotments() {
+			size, err := e.blobCache.GetSize(allotment.Digest)
+			if err != nil {
+				return err
+			}
+			err = e.postByBlobDigest(link, TwoDfsMediaType, allotment.Digest, int(size))
+			if err != nil {
+				return err
+			}
 		}
 	}
 

@@ -1,6 +1,10 @@
 package filesystem
 
-import "sync"
+import (
+	"encoding/json"
+	"fmt"
+	"sync"
+)
 
 type Allotment struct {
 	Row    int    `json:"row"`
@@ -22,10 +26,10 @@ type TwoDFilesystem struct {
 }
 
 type AllotmentManifest struct {
-	Src interface{} `json:"src"`
-	Dst interface{} `json:"dst"`
-	Row int         `json:"row"`
-	Col int         `json:"col"`
+	Src StringList `json:"src"`
+	Dst StringList `json:"dst"`
+	Row int        `json:"row"`
+	Col int        `json:"col"`
 }
 
 type TwoDFsManifest struct {
@@ -41,4 +45,28 @@ type Field interface {
 	Unmarshal(string) (Field, error)
 	// IterateAllotments iterates over all allotments in the filesystem
 	IterateAllotments() chan Allotment
+}
+
+// StringOrStringList represents a type that wraps a string list. It unmarshals as list even a single string.
+type StringList struct {
+	List []string
+}
+
+// UnmarshalJSON custom unmarshaler for StringList
+func (s *StringList) UnmarshalJSON(data []byte) error {
+	// Try to unmarshal as a string and convert it to list
+	var str string
+	if err := json.Unmarshal(data, &str); err == nil {
+		s.List = []string{str}
+		return nil
+	}
+
+	// Try to unmarshal as a list of strings
+	var list []string
+	if err := json.Unmarshal(data, &list); err == nil {
+		s.List = list
+		return nil
+	}
+
+	return fmt.Errorf("invalid type for StringOrStringList")
 }

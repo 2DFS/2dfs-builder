@@ -823,7 +823,7 @@ func (c *containerImage) buildFiled(manifest filesystem.TwoDFsManifest) (filesys
 
 func (c *containerImage) buildAllotment(a filesystem.AllotmentManifest, f filesystem.Field) error {
 
-	fileSha, err := compress.CalculateMultiSha256Digest(a.Src)
+	fileSha, err := compress.CalculateMultiSha256Digest(a.Src.List)
 	if err != nil {
 		return err
 	}
@@ -839,7 +839,7 @@ func (c *containerImage) buildAllotment(a filesystem.AllotmentManifest, f filesy
 			if err != nil {
 				log.Fatal(err)
 			}
-			diffID, compressedSha, err := GetFileSha(cacheKeys, a.Dst)
+			diffID, compressedSha, err := GetFileSha(cacheKeys, a.Dst.List)
 			if err == nil {
 				log.Printf("File %s [CACHED] \n", a.Src)
 				return compressedSha, diffID
@@ -855,7 +855,7 @@ func (c *containerImage) buildAllotment(a filesystem.AllotmentManifest, f filesy
 	if compressedSha == "" {
 		log.Printf("File %s [COPY] \n", a.Src)
 
-		tarPath, err := compress.TarFile(a.Src, a.Dst)
+		tarPath, err := compress.TarFile(a.Src.List, a.Dst.List)
 		if err != nil {
 			return err
 		}
@@ -886,7 +886,7 @@ func (c *containerImage) buildAllotment(a filesystem.AllotmentManifest, f filesy
 		c.upsertCacheKey(fileSha, FileCacheKey{
 			DiffID:        diffID,
 			CompressedSha: compressedSha,
-		}, a.Dst)
+		}, a.Dst.List)
 		c.cacheLock.Unlock()
 
 		if !c.blobCache.Check(compressedSha) {
@@ -998,15 +998,9 @@ func (c *containerImage) filterByPlatform(index v1.Index) v1.Index {
 	return index
 }
 
-func (c *containerImage) upsertCacheKey(fileSha string, cacheFile FileCacheKey, dst interface{}) error {
+func (c *containerImage) upsertCacheKey(fileSha string, cacheFile FileCacheKey, dst []string) error {
 	//convert destination to string
-	destinationStr := ""
-	switch d := dst.(type) {
-	case string:
-		destinationStr = d
-	case []string:
-		destinationStr = strings.Join(d[:], ",")
-	}
+	destinationStr := strings.Join(dst[:], ",")
 	cacheFile.Destination = destinationStr
 
 	keyDigestReader, err := c.keyDigestCache.Get(fileSha)
@@ -1056,15 +1050,8 @@ func ParseCacheKey(reader io.Reader) (CacheKeys, error) {
 }
 
 // Given the file destination, and the CacheKeys, looks if any of the keys match the destination and returns the key and the sha of the file. Error otherwise.
-func GetFileSha(keys CacheKeys, dst interface{}) (string, string, error) {
-	destinationStr := ""
-	switch d := dst.(type) {
-	case string:
-		destinationStr = d
-	case []string:
-		destinationStr = strings.Join(d[:], ",")
-	}
-
+func GetFileSha(keys CacheKeys, dst []string) (string, string, error) {
+	destinationStr := strings.Join(dst, ",")
 	for _, key := range keys.Keys {
 		if key.Destination == destinationStr {
 			return key.DiffID, key.CompressedSha, nil

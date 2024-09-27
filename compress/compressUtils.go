@@ -193,14 +193,9 @@ func TarFolder(fromPath string) (string, error) {
 }
 
 // Creates a tar from a file
-func TarFile(src interface{}, dst interface{}) (string, error) {
-	//convert src and destination to string lists for compatibility
-
-	srcList := toStringlist(src)
-	dstList := toStringlist(src)
-
-	if len(srcList) != len(dstList) {
-		return "", fmt.Errorf("src and Dst list size do not match: %d!=%d", len(srcList), len(dstList))
+func TarFile(src []string, dst []string) (string, error) {
+	if len(src) != len(dst) {
+		return "", fmt.Errorf("src and Dst list size do not match: %d!=%d", len(src), len(dst))
 	}
 
 	// Create a new tar archive writer
@@ -216,7 +211,7 @@ func TarFile(src interface{}, dst interface{}) (string, error) {
 	tarWriter := tar.NewWriter(outFile)
 	defer tarWriter.Close()
 
-	for i, s := range srcList {
+	for i, s := range src {
 
 		// Walk through the source directory
 		copyBuffer := make([]byte, 1024*1024)
@@ -240,7 +235,7 @@ func TarFile(src interface{}, dst interface{}) (string, error) {
 		header.ModTime = time.Date(2000, 1, 1, 0, 0, 0, 0, time.UTC)
 
 		// Set the path within the tar archive to file name
-		header.Name = dstList[i]
+		header.Name = dst[i]
 
 		// Write the header to the tar archive
 		if err := tarWriter.WriteHeader(header); err != nil {
@@ -265,10 +260,11 @@ func TarFile(src interface{}, dst interface{}) (string, error) {
 			return "", nil
 		}
 
+		// Flush the writer
+		tarWriter.Flush()
+
 	}
 
-	// Flush the writer
-	tarWriter.Flush()
 	err = tarWriter.Close()
 	if err != nil {
 		return "", fmt.Errorf("failed flushing tar file: %w", err)
@@ -388,15 +384,7 @@ func CalculateSha256Digest(outFile io.ReadCloser) string {
 	return fmt.Sprintf("%x", digest)
 }
 
-func CalculateMultiSha256Digest(files interface{}) (string, error) {
-	multifile := []string{}
-	switch t := files.(type) {
-	case string:
-		multifile = append(multifile, t)
-	case []string:
-		multifile = t
-	}
-
+func CalculateMultiSha256Digest(multifile []string) (string, error) {
 	digests := []byte{}
 	for _, f := range multifile {
 		err := func() error {
@@ -432,17 +420,4 @@ func CopyFile(src *os.File, dst *os.File) error {
 	}
 	return nil
 
-}
-
-func toStringlist(t interface{}) []string {
-	dstList := []string{}
-
-	switch d := t.(type) {
-	case string:
-		dstList = []string{d}
-	case []string:
-		dstList = d
-	}
-
-	return dstList
 }

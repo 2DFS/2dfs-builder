@@ -3,11 +3,10 @@ package filesystem
 import "sync"
 
 type Allotment struct {
-	Row      int    `json:"row"`
-	Col      int    `json:"col"`
-	Digest   string `json:"digest"`
-	DiffID   string `json:"diffid"`
-	FileName string `json:"filename"`
+	Row    int    `json:"row"`
+	Col    int    `json:"col"`
+	Digest string `json:"digest"`
+	DiffID string `json:"diffid"`
 }
 
 type Cols struct {
@@ -23,10 +22,10 @@ type TwoDFilesystem struct {
 }
 
 type AllotmentManifest struct {
-	Src string `json:"src"`
-	Dst string `json:"dst"`
-	Row int    `json:"row"`
-	Col int    `json:"col"`
+	Src interface{} `json:"src"`
+	Dst interface{} `json:"dst"`
+	Row int         `json:"row"`
+	Col int         `json:"col"`
 }
 
 type TwoDFsManifest struct {

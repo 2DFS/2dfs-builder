@@ -18,7 +18,7 @@ type OciImageLink struct {
 	Registry     string
 	service      string
 	Repository   string
-	Tag          string
+	Reference    string
 }
 
 type tokenResponse struct {
@@ -49,7 +49,7 @@ func DownloadIndex(image OciImageLink) (v1.Index, error) {
 	}
 
 	// Get Manifest at https://{registry}/v2/{repository}/manifests/{tag}
-	indexRequest, err := http.NewRequest("GET", fmt.Sprintf("%s://%s/v2/%s/manifests/%s", PullPushProtocol, image.Registry, image.Repository, image.Tag), nil)
+	indexRequest, err := http.NewRequest("GET", fmt.Sprintf("%s://%s/v2/%s/manifests/%s", PullPushProtocol, image.Registry, image.Repository, image.Reference), nil)
 	if err != nil {
 		return v1.Index{}, err
 	}
@@ -84,7 +84,7 @@ func DownloadIndex(image OciImageLink) (v1.Index, error) {
 	}
 	if indexResult.StatusCode != http.StatusOK {
 		// try getting manifest directly for compatibility with single arch images
-		manifestreader, err := DownloadManifest(image, image.Tag)
+		manifestreader, err := DownloadManifest(image, image.Reference)
 		if err != nil {
 			return v1.Index{}, fmt.Errorf("error getting index: %d", indexResult.StatusCode)
 		}
@@ -107,7 +107,7 @@ func DownloadIndex(image OciImageLink) (v1.Index, error) {
 			}
 		}
 
-		return v1.Index{
+		idx := v1.Index{
 			MediaType: v1.MediaTypeImageIndex,
 			Manifests: []v1.Descriptor{
 				{
@@ -117,7 +117,9 @@ func DownloadIndex(image OciImageLink) (v1.Index, error) {
 					Platform:  platform,
 				},
 			},
-		}, nil
+		}
+		idx.SchemaVersion = 2
+		return idx, nil
 	}
 
 	index, err := ReadIndex(indexResult.Body)

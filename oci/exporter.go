@@ -1,12 +1,10 @@
 package oci
 
 import (
-	"bytes"
 	"encoding/json"
 	"fmt"
 	"io"
 	"log"
-	"net/http"
 	"os"
 	"path/filepath"
 	"time"
@@ -21,6 +19,8 @@ type FieldExporter interface {
 	ExportAsTar(dst string) error
 	Upload() error
 }
+
+var uploadToken string = ""
 
 func (image *containerImage) ExportAsTar(path string) error {
 
@@ -149,14 +149,26 @@ func (image *containerImage) ExportAsTar(path string) error {
 }
 
 func (image *containerImage) Upload() error {
-	s := spinner.New(spinner.CharSets[9], 100*time.Millisecond)
-	s.Start()
 
-	// Start Index Upload
-	s.Suffix = fmt.Sprintf("%s [Uploading...]\n", image.url)
-	s.Restart()
-	_, err := image.uploadIndex(OciImageLink{})
+	imageLink := OciImageLink{
+		Registry:   image.registry,
+		Repository: image.repository,
+		Reference:  image.partitionTag,
+	}
+
+	log.Default().Printf("Pushing %s/%s:%s \n", imageLink.Registry, imageLink.Repository, imageLink.Reference)
+
+	//Upload Blobs
+	err := image.uploadBlobs(imageLink)
 	if err != nil {
+		log.Default().Printf("[ERROR] Error uploading blobs: %s", err)
+		return err
+	}
+
+	// Index Upload
+	err = image.uploadIndex(imageLink)
+	if err != nil {
+		log.Default().Printf("[ERROR] Error uploading blobs: %s", err)
 		return err
 	}
 
@@ -188,96 +200,141 @@ func copyFile(src io.ReadCloser, dst string) error {
 }
 
 // Upload the index to the registry and retunrs the upload token used
-func (image *containerImage) uploadIndex(link OciImageLink) (string, error) {
+func (image *containerImage) uploadIndex(link OciImageLink) error {
+	s := spinner.New(spinner.CharSets[9], 100*time.Millisecond)
 
-	// Authenticate only if registryAuth and service are provided
-	bearer := ""
-	if link.registryAuth != "" && link.service != "" {
-		token, err := getToken(link, "push")
-		if err != nil {
-			return "", err
-		}
-
-		bearer = "Bearer " + token
-	}
+	s.Suffix = fmt.Sprintf("%s/%s [Uploading...]\n", image.indexHash[:10], v1.MediaTypeImageIndex)
+	s.Start()
 
 	indexBytes, err := json.Marshal(image.index)
 	if err != nil {
-		return "", err
+		return err
 	}
+	uploadToken, err = UploadManifest(link, indexBytes, v1.MediaTypeImageIndex, uploadToken)
 
-	url := fmt.Sprintf("%s://%s/v2/%s/manifests/%s", PullPushProtocol, image.registry, image.repository, image.partitionTag)
-	req, err := http.NewRequest("PUT", url, bytes.NewReader(indexBytes))
-	if err != nil {
-		return "", err
-	}
-	req.Header.Set("Content-Type", v1.MediaTypeImageIndex)
-	req.Header.Add("Authorization", bearer)
+	s.Stop()
 
-	response, err := http.DefaultClient.Do(req)
-	if err != nil {
-		log.Fatal(err)
-	}
-	defer response.Body.Close()
-
-	// If the request is unauthorized, try to get a token and retry
-	// This works only if bearer was empty, thus auth was not attempted
-	if response.StatusCode == http.StatusUnauthorized || response.StatusCode == 403 && link.registryAuth == "" {
-		authHeader := response.Header[http.CanonicalHeaderKey("WWW-Authenticate")]
-		fmt.Println(response.Header)
-		if len(authHeader) == 0 {
-			return "", fmt.Errorf("error pushing index: %d, with auth header:%v", response.StatusCode, authHeader)
-		}
-		realm, service := parseWWWAuthenticate(authHeader)
-		if realm == "" || service == "" {
-			return "", fmt.Errorf("error pushing index: %d", response.StatusCode)
-		}
-		link.service = service
-		link.registryAuth = realm
-		return image.uploadIndex(link)
-	}
-
-	log.Println("Index Upload Status: ", response.Status)
-	return bearer, nil
-
+	return err
 }
 
-func (image *containerImage) uploadManifests() error {
-	for i, manifest := range image.index.Manifests {
+func (e *containerImage) uploadBlobs(link OciImageLink) error {
+	s := spinner.New(spinner.CharSets[9], 100*time.Millisecond)
+	s.Start()
+	var tdfsFilesystemDigest string = ""
+
+	// Upload manifest layers
+	for _, manifest := range e.manifests {
+		for _, layer := range manifest.Layers {
+			layerDigest := layer.Digest.Encoded()
+			layerMediaType := layer.MediaType
+
+			//spinner
+			s.Suffix = fmt.Sprintf("%s/%s [Uploading...]\n", layerDigest[:10], layerMediaType)
+			s.Restart()
+
+			err := e.postByBlobDigest(link, layerMediaType, layerDigest, int(layer.Size))
+			if err != nil {
+				return err
+			}
+
+			if layerMediaType == TwoDfsMediaType {
+				tdfsFilesystemDigest = layerDigest
+			}
+
+		}
+	}
+
+	// Upload manifests configs
+	for _, manifest := range e.manifests {
+		configDigest := manifest.Config.Digest.Encoded()
+		layerMediaType := manifest.Config.MediaType
+
+		//spinner
+		s.Suffix = fmt.Sprintf("%s/%s [Uploading...]\n", configDigest[:10], layerMediaType)
+		s.Restart()
+
+		err := e.postByBlobDigest(link, v1.MediaTypeImageConfig, configDigest, int(manifest.Config.Size))
+		if err != nil {
+			return err
+		}
+	}
+
+	// Upload allotments
+	if tdfsFilesystemDigest != "" {
+		fieldReader, err := e.blobCache.Get(tdfsFilesystemDigest)
+		if err != nil {
+			return err
+		}
+		defer fieldReader.Close()
+		fieldBytes, err := io.ReadAll(fieldReader)
+		if err != nil {
+			return err
+		}
+		field, err := filesystem.GetField().Unmarshal(string(fieldBytes[:]))
+		if err != nil {
+			return err
+		}
+		e.field = field
+		for allotment := range e.field.IterateAllotments() {
+			size, err := e.blobCache.GetSize(allotment.Digest)
+			if err != nil {
+				return err
+			}
+			err = e.postByBlobDigest(link, TwoDfsMediaType, allotment.Digest, int(size))
+			if err != nil {
+				return err
+			}
+		}
+	}
+
+	// Upload manifests
+	for _, manifest := range e.index.Manifests {
 		manifestDigest := manifest.Digest.Encoded()
-		configDigest := image.manifests[i].Config.Digest.Encoded()
-		image.postByDigest(v1.MediaTypeImageManifest, manifestDigest)
-		image.postByDigest(v1.MediaTypeImageManifest, configDigest)
+		layerMediaType := manifest.MediaType
 
-		//TODO: use reader to perform upload
+		//spinner
+		s.Suffix = fmt.Sprintf("%s/%s [Uploading...]\n", manifestDigest[:10], layerMediaType)
+		s.Restart()
+
+		err := e.postByBlobDigest(link, layerMediaType, manifestDigest, int(manifest.Size))
+		if err != nil {
+			return err
+		}
 	}
+
+	s.Stop()
 	return nil
 }
 
-func (e *containerImage) uploadBlobs() error {
-	return nil
-}
+func (image *containerImage) postByBlobDigest(link OciImageLink, mediaType string, digest string, size int) error {
+	blobReader, err := image.blobCache.Get(digest)
+	if err != nil {
+		return err
+	}
+	defer blobReader.Close()
 
-func (image *containerImage) postByDigest(mediaType string, digest string) error {
+	// since this is not an iindex upload, we use blob digest as reference instead of a Tag
+	linkWithReference := OciImageLink{
+		Registry:   link.Registry,
+		Repository: link.Repository,
+		Reference:  digest,
+	}
+
 	switch mediaType {
 	case v1.MediaTypeImageManifest:
-		log.Default().Println("Upload Manifest")
-		manifestReader, err := image.blobCache.Get(digest)
+		manifestbytes, err := io.ReadAll(blobReader)
 		if err != nil {
 			return err
 		}
-		defer manifestReader.Close()
-		return nil
-	case v1.MediaTypeImageConfig:
-		log.Default().Println("Upload Config")
-		manifestReader, err := image.blobCache.Get(digest)
+		uploadToken, err = UploadManifest(linkWithReference, manifestbytes, mediaType, uploadToken)
 		if err != nil {
 			return err
 		}
-		defer manifestReader.Close()
-		return nil
 	default:
-		log.Default().Println("Blob")
+		uploadToken, err = UploadBlob(linkWithReference, blobReader, size, uploadToken)
+		if err != nil {
+			return err
+		}
 	}
 	return nil
 }

@@ -868,6 +868,7 @@ func (c *containerImage) buildAllotment(a filesystem.AllotmentManifest, f filesy
 			return err
 		}
 		defer tarReader.Close()
+		defer os.Remove(tarPath)
 
 		diffID = compress.CalculateSha256Digest(tarReader)
 		tarReader.Seek(0, 0)
@@ -883,6 +884,7 @@ func (c *containerImage) buildAllotment(a filesystem.AllotmentManifest, f filesy
 			return err
 		}
 		defer archive.Close()
+		defer os.Remove(archiveName)
 		compressedSha = compress.CalculateSha256Digest(archive)
 
 		//add uncompressed allotment cache reference

@@ -247,7 +247,7 @@ func DownloadBlob(ctx context.Context, image OciImageLink, digest digest.Digest,
 	}
 
 	// Get Manifest at https://{registry}/v2/{repository}/manifests/{tag}
-	blobRequest, err := http.NewRequest("GET", fmt.Sprintf("https://%s/v2/%s/blobs/%s", image.Registry, image.Repository, digest.String()), nil)
+	blobRequest, err := http.NewRequest("GET", fmt.Sprintf("%s://%s/v2/%s/blobs/%s", PullPushProtocol, image.Registry, image.Repository, digest.String()), nil)
 	if err != nil {
 		return nil, err
 	}
@@ -304,7 +304,7 @@ func DownloadManifest(image OciImageLink, digest string) (io.ReadCloser, error) 
 	}
 
 	// Get Manifest at https://{registry}/v2/{repository}/manifests/{tag}
-	manifestRequest, err := http.NewRequest("GET", fmt.Sprintf("https://%s/v2/%s/manifests/%s", image.Registry, image.Repository, digest), nil)
+	manifestRequest, err := http.NewRequest("GET", fmt.Sprintf("%s://%s/v2/%s/manifests/%s", PullPushProtocol, image.Registry, image.Repository, digest), nil)
 	if err != nil {
 		return nil, err
 	}
@@ -319,6 +319,11 @@ func DownloadManifest(image OciImageLink, digest string) (io.ReadCloser, error) 
 
 	client := http.DefaultClient
 	manifestResult, err := client.Do(manifestRequest)
+
+	if err != nil {
+		fmt.Printf("[ERROR] %v \n", err)
+		return nil, err
+	}
 
 	// If the request is unauthorized, try to get a token and retry
 	// This works only if bearer was empty, thus auth was not attempted

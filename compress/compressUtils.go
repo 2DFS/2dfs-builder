@@ -193,65 +193,78 @@ func TarFolder(fromPath string) (string, error) {
 }
 
 // Creates a tar from a file
-func TarFile(src string, dst string) (string, error) {
+func TarFile(src []string, dst []string) (string, error) {
+	if len(src) != len(dst) {
+		return "", fmt.Errorf("src and Dst list size do not match: %d!=%d", len(src), len(dst))
+	}
 
-	tmpfilename := sha256.Sum256([]byte(src + ""))
+	// Create a new tar archive writer
 	tmpdir := os.TempDir()
 
-	// Open the output file for writing in gzip format
-	outFile, err := os.CreateTemp(tmpdir, fmt.Sprintf("%x", tmpfilename))
+	// Open the output file for writing in tar format
+	outFile, err := os.CreateTemp(tmpdir, "*")
 	if err != nil {
 		return "", err
 	}
 	defer outFile.Close()
 
-	// Create a new tar archive writer
 	tarWriter := tar.NewWriter(outFile)
 	defer tarWriter.Close()
 
-	// Walk through the source directory
-	copyBuffer := make([]byte, 1024*1024)
-	info, err := os.Stat(src)
-	if err != nil {
-		return "", err
+	for i, s := range src {
+
+		// Walk through the source directory
+		copyBuffer := make([]byte, 1024*1024)
+		info, err := os.Stat(s)
+		if err != nil {
+			return "", err
+		}
+
+		// Skip non regular files
+		if !info.Mode().IsRegular() {
+			return "", fmt.Errorf("The input is a non-regular file")
+		}
+
+		// Create a tar header for the current file/directory
+		header, err := tar.FileInfoHeader(info, info.Name())
+		if err != nil {
+			return "", err
+		}
+		header.AccessTime = time.Date(2000, 1, 1, 0, 0, 0, 0, time.UTC)
+		header.ChangeTime = time.Date(2000, 1, 1, 0, 0, 0, 0, time.UTC)
+		header.ModTime = time.Date(2000, 1, 1, 0, 0, 0, 0, time.UTC)
+
+		// Set the path within the tar archive to file name
+		header.Name = dst[i]
+
+		// Write the header to the tar archive
+		if err := tarWriter.WriteHeader(header); err != nil {
+			return "", err
+		}
+
+		// copy file inside tar
+		err = func() error {
+			file, err := os.Open(s)
+			if err != nil {
+				return err
+			}
+			defer file.Close()
+
+			_, err = io.CopyBuffer(tarWriter, file, copyBuffer)
+			if err != nil {
+				return err
+			}
+			return nil
+		}()
+		if err != nil {
+			return "", nil
+		}
+
+		// Flush the writer
+		tarWriter.Flush()
+
 	}
 
-	// Skip non regular files
-	if !info.Mode().IsRegular() {
-		return "", fmt.Errorf("The input is a non-regular file")
-	}
-
-	// Create a tar header for the current file/directory
-	header, err := tar.FileInfoHeader(info, info.Name())
-	if err != nil {
-		return "", err
-	}
-	header.AccessTime = time.Date(2000, 1, 1, 0, 0, 0, 0, time.UTC)
-	header.ChangeTime = time.Date(2000, 1, 1, 0, 0, 0, 0, time.UTC)
-	header.ModTime = time.Date(2000, 1, 1, 0, 0, 0, 0, time.UTC)
-
-	// Set the path within the tar archive to file name
-	header.Name = dst
-
-	// Write the header to the tar archive
-	if err := tarWriter.WriteHeader(header); err != nil {
-		return "", err
-	}
-
-	file, err := os.Open(src)
-	if err != nil {
-		return "", err
-	}
-	defer file.Close()
-
-	// copy file inside tar
-	_, err = io.CopyBuffer(tarWriter, file, copyBuffer)
-	if err != nil {
-		return "", err
-	}
-
-	// Flush the writer
-	tarWriter.Flush()
 	err = tarWriter.Close()
 	if err != nil {
 		return "", fmt.Errorf("failed flushing tar file: %w", err)
@@ -369,6 +382,28 @@ func CalculateSha256Digest(outFile io.ReadCloser) string {
 	}
 	digest := sha256.Sum256(allbytes)
 	return fmt.Sprintf("%x", digest)
+}
+
+func CalculateMultiSha256Digest(multifile []string) (string, error) {
+	digests := []byte{}
+	for _, f := range multifile {
+		err := func() error {
+			reader, err := os.Open(f)
+			if err != nil {
+				return err
+			}
+			defer reader.Close()
+			digests = append(digests, []byte(CalculateSha256Digest(reader))...)
+			return nil
+
+		}()
+		if err != nil {
+			return "", err
+		}
+	}
+
+	digest := sha256.Sum256(digests)
+	return fmt.Sprintf("%x", digest), nil
 }
 
 func CopyFile(src *os.File, dst *os.File) error {

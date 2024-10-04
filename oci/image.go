@@ -822,15 +822,11 @@ func (c *containerImage) buildFiled(manifest filesystem.TwoDFsManifest) (filesys
 }
 
 func (c *containerImage) buildAllotment(a filesystem.AllotmentManifest, f filesystem.Field) error {
-	// open source file
-	src, err := os.Open(a.Src)
+
+	fileSha, err := compress.CalculateMultiSha256Digest(a.Src.List)
 	if err != nil {
 		return err
 	}
-	defer src.Close()
-
-	fileSha := compress.CalculateSha256Digest(src)
-	src.Seek(0, 0)
 
 	compressedSha, diffID := func() (string, string) {
 		c.cacheLock.Lock()
@@ -843,7 +839,7 @@ func (c *containerImage) buildAllotment(a filesystem.AllotmentManifest, f filesy
 			if err != nil {
 				log.Fatal(err)
 			}
-			diffID, compressedSha, err := GetFileSha(cacheKeys, a.Dst)
+			diffID, compressedSha, err := GetFileSha(cacheKeys, a.Dst.List)
 			if err == nil {
 				log.Printf("File %s [CACHED] \n", a.Src)
 				return compressedSha, diffID
@@ -859,7 +855,7 @@ func (c *containerImage) buildAllotment(a filesystem.AllotmentManifest, f filesy
 	if compressedSha == "" {
 		log.Printf("File %s [COPY] \n", a.Src)
 
-		tarPath, err := compress.TarFile(a.Src, a.Dst)
+		tarPath, err := compress.TarFile(a.Src.List, a.Dst.List)
 		if err != nil {
 			return err
 		}
@@ -890,10 +886,9 @@ func (c *containerImage) buildAllotment(a filesystem.AllotmentManifest, f filesy
 		//add uncompressed allotment cache reference
 		c.cacheLock.Lock()
 		c.upsertCacheKey(fileSha, FileCacheKey{
-			Destination:   a.Dst,
 			DiffID:        diffID,
 			CompressedSha: compressedSha,
-		})
+		}, a.Dst.List)
 		c.cacheLock.Unlock()
 
 		if !c.blobCache.Check(compressedSha) {
@@ -916,11 +911,10 @@ func (c *containerImage) buildAllotment(a filesystem.AllotmentManifest, f filesy
 
 	// add allotments
 	f.AddAllotment(filesystem.Allotment{
-		Row:      a.Row,
-		Col:      a.Col,
-		Digest:   compressedSha,
-		DiffID:   diffID,
-		FileName: a.Dst,
+		Row:    a.Row,
+		Col:    a.Col,
+		Digest: compressedSha,
+		DiffID: diffID,
 	})
 
 	return nil
@@ -1006,7 +1000,10 @@ func (c *containerImage) filterByPlatform(index v1.Index) v1.Index {
 	return index
 }
 
-func (c *containerImage) upsertCacheKey(fileSha string, cacheFile FileCacheKey) error {
+func (c *containerImage) upsertCacheKey(fileSha string, cacheFile FileCacheKey, dst []string) error {
+	//convert destination to string
+	destinationStr := strings.Join(dst[:], ",")
+	cacheFile.Destination = destinationStr
 
 	keyDigestReader, err := c.keyDigestCache.Get(fileSha)
 	cachekey := CacheKeys{
@@ -1055,9 +1052,10 @@ func ParseCacheKey(reader io.Reader) (CacheKeys, error) {
 }
 
 // Given the file destination, and the CacheKeys, looks if any of the keys match the destination and returns the key and the sha of the file. Error otherwise.
-func GetFileSha(keys CacheKeys, dst string) (string, string, error) {
+func GetFileSha(keys CacheKeys, dst []string) (string, string, error) {
+	destinationStr := strings.Join(dst, ",")
 	for _, key := range keys.Keys {
-		if key.Destination == dst {
+		if key.Destination == destinationStr {
 			return key.DiffID, key.CompressedSha, nil
 		}
 	}

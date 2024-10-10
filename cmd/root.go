@@ -28,6 +28,10 @@ func Execute() error {
 }
 
 func init() {
+
+	// Create a new logger with the custom format
+	log.SetFlags(log.LstdFlags | log.Lmicroseconds)
+
 	// check if basePath exists if not create it
 
 	if _, err := os.Stat(basePath); os.IsNotExist(err) {

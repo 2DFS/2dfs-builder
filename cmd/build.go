@@ -8,8 +8,8 @@ import (
 	"os"
 	"time"
 
-	"github.com/giobart/2dfs-builder/filesystem"
-	"github.com/giobart/2dfs-builder/oci"
+	"github.com/2DFS/2dfs-builder/filesystem"
+	"github.com/2DFS/2dfs-builder/oci"
 	"github.com/spf13/cobra"
 )
 

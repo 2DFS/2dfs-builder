@@ -9,9 +9,9 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/2DFS/2dfs-builder/compress"
+	"github.com/2DFS/2dfs-builder/filesystem"
 	"github.com/briandowns/spinner"
-	"github.com/giobart/2dfs-builder/compress"
-	"github.com/giobart/2dfs-builder/filesystem"
 	v1 "github.com/opencontainers/image-spec/specs-go/v1"
 )
 

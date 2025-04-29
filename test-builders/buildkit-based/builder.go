@@ -10,7 +10,7 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/giobart/2dfs-builder/filesystem"
+	"github.com/2DFS/2dfs-builder/filesystem"
 	buildkitclient "github.com/moby/buildkit/client"
 	"github.com/moby/buildkit/client/llb"
 	"github.com/moby/buildkit/client/llb/imagemetaresolver"

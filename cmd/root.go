@@ -13,7 +13,7 @@ var (
 	rootCmd = &cobra.Command{
 		Use:   "tdfs",
 		Short: "Build a a 2dfs field ",
-		Long:  `Requires a 2dfs.yaml file in the current directory or a path to a 2dfs.yaml file. Read docs at https://github.com/giobart/2dfs-builder`,
+		Long:  `Requires a 2dfs.yaml file in the current directory or a path to a 2dfs.yaml file. Read docs at https://github.com/2DFS/2dfs-builder`,
 	}
 	homeDir, _     = os.UserHomeDir()
 	basePath       = path.Join(homeDir, ".2dfs")

@@ -11,9 +11,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/giobart/2dfs-builder/cache"
-	"github.com/giobart/2dfs-builder/filesystem"
-	"github.com/giobart/2dfs-builder/oci"
+	"github.com/2DFS/2dfs-builder/cache"
+	"github.com/2DFS/2dfs-builder/filesystem"
+	"github.com/2DFS/2dfs-builder/oci"
 	"github.com/jedib0t/go-pretty/v6/table"
 	"github.com/spf13/cobra"
 )

@@ -15,9 +15,9 @@ import (
 
 	"log"
 
-	"github.com/giobart/2dfs-builder/cache"
-	compress "github.com/giobart/2dfs-builder/compress"
-	"github.com/giobart/2dfs-builder/filesystem"
+	"github.com/2DFS/2dfs-builder/cache"
+	compress "github.com/2DFS/2dfs-builder/compress"
+	"github.com/2DFS/2dfs-builder/filesystem"
 	"github.com/opencontainers/go-digest"
 	v1 "github.com/opencontainers/image-spec/specs-go/v1"
 )

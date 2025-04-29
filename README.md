@@ -1,4 +1,4 @@
-![tdfs](img/tdfs.png)
+![tdfs](./img/tdfs.png)
 
 # `tdfs`: a builder 👷‍♀️ for 2DFS images 
 

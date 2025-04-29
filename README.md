@@ -18,6 +18,8 @@ Navigate to the `examples/simple-2dfs` example directory.
 
 Use `tdfs build ubuntu:22.04 mytdfs:v1` to create your first tdfs image.
 
+![tdfs build](img/build-terminal.png)
+
 ## `tdfs --help`
 
 ```

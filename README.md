@@ -18,7 +18,7 @@ Use `tdfs build ubuntu:22.04 mytdfs:v1` to create your first tdfs image.
 ## tdfs --help
 
 ```
-Requires a 2dfs.yaml file in the current directory or a path to a 2dfs.yaml file. Read docs at https://github.com/giobart/2dfs-builder
+Requires a 2dfs.yaml file in the current directory or a path to a 2dfs.yaml file. Read docs at https://github.com/2DFS/2dfs-builder
 
 Usage:
   tdfs [command]

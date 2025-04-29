@@ -7,7 +7,7 @@ import (
 	"path/filepath"
 	"sync"
 
-	"github.com/giobart/2dfs-builder/compress"
+	"github.com/2DFS/2dfs-builder/compress"
 )
 
 type cachestore struct {

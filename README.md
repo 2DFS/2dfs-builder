@@ -1,5 +1,8 @@
-# 2dfs-builder
-Builder for 2DFS Images
+![tdfs](img/tdfs.png)
+
+# `tdfs`: a builder 👷‍♀️ for 2DFS images 
+
+This is the command line interface that allows you to build and manage 2DFS images.
 
 ## Build and Install `tdfs` cli
 
@@ -15,7 +18,7 @@ Navigate to the `examples/simple-2dfs` example directory.
 
 Use `tdfs build ubuntu:22.04 mytdfs:v1` to create your first tdfs image.
 
-## tdfs --help
+## `tdfs --help`
 
 ```
 Requires a 2dfs.yaml file in the current directory or a path to a 2dfs.yaml file. Read docs at https://github.com/2DFS/2dfs-builder
@@ -32,8 +35,18 @@ Available Commands:
 Flags:
   -h, --help   help for tdfs
 ```
+## `tdfs` image push
 
-## tdfs image export 
+You can push your tdfs image to an OCI+2DFS compliant registry using the `push` command. 
+
+```
+Usage:
+  tdfs image push [reference] [flags]
+```
+
+You can deploy your own OCI+2DFS compliant registry, check out the [2DFS registry repository](https://github.com/2DFS/2dfs-registry) for more information.
+
+## `tdfs` image export 
 
 
 ```
@@ -59,7 +72,7 @@ tdfs image export mytdfs:v1--0.0.0.0 image0.tar.gz
 ```
 This will export only allotment (0,0) as OCI layer. 
 
-## Run tdfs images in docker
+## Run `tdfs` images in docker without a registry
 
 If you exported a partitioned image as tar.gz file, like e.g., `image1.tar.gz`.
 You can import it as a docker image using the docker load command:

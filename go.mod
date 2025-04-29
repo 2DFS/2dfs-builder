@@ -1,4 +1,4 @@
-module github.com/giobart/2dfs-builder
+module github.com/2DFS/2dfs-builder
 
 go 1.22.0
 

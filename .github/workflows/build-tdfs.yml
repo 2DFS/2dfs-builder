@@ -28,7 +28,7 @@ jobs:
 
       - name: Build tdfs (${{ matrix.os }} / ${{ matrix.arch }})
         run: |
-          env GOOS=${{ matrix.os }} GOARCH=${{ matrix.arch }}  go build -ldflags="-X 'github.com/2DFS/2dfs-builder/cmd.Version=${{ github.ref_name }}'" -o tdfs internal/tdfs.go
+          env GOOS=${{ matrix.os }} GOARCH=${{ matrix.arch }} CGO_ENABLED=0 go build -ldflags="-X 'github.com/2DFS/2dfs-builder/cmd.Version=${{ github.ref_name }}'" -o tdfs internal/tdfs.go
 
       - name: Package Artifacts
         run: |

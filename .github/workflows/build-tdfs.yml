@@ -14,7 +14,7 @@ jobs:
           - { runner: macos-latest,  os: darwin,  arch: amd64}
           - { runner: macos-latest,  os: darwin,  arch: arm64}
           - { runner: ubuntu-latest, os: linux,   arch: amd64}
-          - { runner: ubuntu-latest, os: linux,   arch: amd64}
+          - { runner: ubuntu-latest, os: linux,   arch: arm64}
     steps:
       - uses: actions/checkout@v4
 
@@ -25,7 +25,7 @@ jobs:
 
       - name: Build tdfs ({{ matrix.os }} / {{ matrix.architecture }})
         run: |
-          env GOOS={{ matrix.os }} GOARCH=${{ matrix.architecture }}  go build -ldflags="-X 'github.com/2DFS/2dfs-builder/cmd.Version=${{ github.ref_name }}'" -o tdfs internal/tdfs.go
+          env GOOS=${{ matrix.os }} GOARCH=${{ matrix.architecture }}  go build -ldflags="-X 'github.com/2DFS/2dfs-builder/cmd.Version=${{ github.ref_name }}'" -o tdfs internal/tdfs.go
 
       - name: Package Artifacts
         run: |

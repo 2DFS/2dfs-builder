@@ -26,15 +26,15 @@ jobs:
         with:
           go-version: 1.23.0
 
-      - name: Build tdfs ({{ matrix.os }} / {{ matrix.architecture }})
+      - name: Build tdfs (${{ matrix.os }} / ${{ matrix.arch }})
         run: |
-          env GOOS=${{ matrix.os }} GOARCH=${{ matrix.architecture }}  go build -ldflags="-X 'github.com/2DFS/2dfs-builder/cmd.Version=${{ github.ref_name }}'" -o tdfs internal/tdfs.go
+          env GOOS=${{ matrix.os }} GOARCH=${{ matrix.arch }}  go build -ldflags="-X 'github.com/2DFS/2dfs-builder/cmd.Version=${{ github.ref_name }}'" -o tdfs internal/tdfs.go
 
       - name: Package Artifacts
         run: |
-          mkdir -p tdfs_${{ matrix.os }}_${{ matrix.architecture }}
-          cp tdfs tdfs_${{ matrix.os }}_${{ matrix.architecture }}
-          tar -czvf tdfs_${{ matrix.os }}_${{ matrix.architecture }}.tar.gz -C tdfs_${{ matrix.os }}_${{ matrix.architecture }} .
+          mkdir -p tdfs_${{ matrix.os }}_${{ matrix.arch }}
+          cp tdfs tdfs_${{ matrix.os }}_${{ matrix.arch }}
+          tar -czvf tdfs_${{ matrix.os }}_${{ matrix.arch }}.tar.gz -C tdfs_${{ matrix.os }}_${{ matrix.arch }} .
 
       - name: Release Artifacts
         uses: softprops/action-gh-release@v2
@@ -46,5 +46,5 @@ jobs:
           append_body: true
           prerelease: true
           files: |
-            tdfs_${{ matrix.os }}_${{ matrix.architecture }}.tar.gz
+            tdfs_${{ matrix.os }}_${{ matrix.arch }}.tar.gz
 

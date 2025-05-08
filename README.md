@@ -1,3 +1,5 @@
+[![Build tdfs CLI](https://github.com/2DFS/2dfs-builder/actions/workflows/build-tdfs.yml/badge.svg?branch=v0.0.102)](https://github.com/2DFS/2dfs-builder/actions/workflows/build-tdfs.yml)
+
 ![tdfs](./img/tdfs.png)
 
 # `tdfs`: a builder 👷‍♀️ for 2DFS images 

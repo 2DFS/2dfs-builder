@@ -985,7 +985,7 @@ func (c *containerImage) buildAllotment(a filesystem.AllotmentManifest, f filesy
 					return err
 				}
 				archive.Seek(0, 0)
-				copyBuffer := make([]byte, 1024*1024*100)
+				copyBuffer := make([]byte, 1024*1024)
 				_, err = io.CopyBuffer(blobWriter, archive, copyBuffer)
 				blobWriter.Close()
 				archive.Close()

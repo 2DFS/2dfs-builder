@@ -2,8 +2,6 @@ module github.com/2DFS/2dfs-builder
 
 go 1.24.0
 
-toolchain go1.24.13
-
 require (
 	github.com/briandowns/spinner v1.23.1
 	github.com/containerd/stargz-snapshotter/estargz v0.15.1

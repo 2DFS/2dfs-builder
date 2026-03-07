@@ -14,6 +14,7 @@ import (
 	"sync"
 
 	"log"
+	"time"
 
 	"github.com/2DFS/2dfs-builder/cache"
 	compress "github.com/2DFS/2dfs-builder/compress"
@@ -69,8 +70,9 @@ type containerImage struct {
 }
 
 type StargzOptions struct {
-	Enabled   bool
-	ChunkSize int
+	Enabled          bool
+	ChunkSize        int
+	CompressionLevel int
 }
 
 type CacheKeys struct {
@@ -157,6 +159,7 @@ func NewImageWithStargzOptions(ctx context.Context, url string, forcepull bool, 
 		return nil, err
 	}
 
+	downloadStart := time.Now()
 	err = img.downloadManifests()
 	if err != nil {
 		return nil, err
@@ -168,6 +171,7 @@ func NewImageWithStargzOptions(ctx context.Context, url string, forcepull bool, 
 			return nil, err
 		}
 	}
+	log.Printf("Image index retrieved (total download took %s)", time.Since(downloadStart))
 
 	return img, nil
 
@@ -887,29 +891,19 @@ func (c *containerImage) buildAllotment(a filesystem.AllotmentManifest, f filesy
 		if c.stargzOptions.Enabled {
 			log.Printf("use stargz compression\n")
 			// Use stargz compression
-			stargzResult, err := compress.TarToStargz(tarPath, c.stargzOptions.ChunkSize)
+			stargzResult, err := compress.TarToStargz(tarPath, c.stargzOptions.ChunkSize, c.stargzOptions.CompressionLevel)
 			if err != nil {
 				return err
 			}
 			defer stargzResult.CompressedBlob.Close()
 
-			// Write blob to a temp file while computing the compressed digest
-			tmpFile, err := os.CreateTemp("", "stargz-blob-*")
-			if err != nil {
-				return err
-			}
-			tmpPath := tmpFile.Name()
-			defer os.Remove(tmpPath)
-
-			compressedSha, _, err = compress.CalculateStargzDigest(io.TeeReader(stargzResult.CompressedBlob, tmpFile))
-			tmpFile.Close()
+			// Stream blob directly into cache, computing digest in one pass
+			compressedSha, err = c.blobCache.AddFromReader(stargzResult.CompressedBlob)
 			if err != nil {
 				return err
 			}
 
-			// Get DiffID from the stargz blob (must be called after blob is fully read)
-			// This is the correct DiffID that matches what the stargz snapshotter will calculate
-			// when decompressing the layer, as estargz adds TOC to the archive
+			// DiffID is computed during estargz.Build, available after blob is consumed
 			diffID = stargzResult.CompressedBlob.DiffID().Encoded()
 			log.Printf("diff id %s\n", diffID)
 
@@ -931,27 +925,7 @@ func (c *containerImage) buildAllotment(a filesystem.AllotmentManifest, f filesy
 				UncompressedSize: uncompressedSize,
 			}, a.Dst.List)
 			c.cacheLock.Unlock()
-
-			if !c.blobCache.Check(compressedSha) {
-				blobWriter, err := c.blobCache.Add(compressedSha)
-				if err != nil {
-					return err
-				}
-				tmpReader, err := os.Open(tmpPath)
-				if err != nil {
-					blobWriter.Close()
-					return err
-				}
-				copyBuffer := make([]byte, 1024*1024)
-				_, err = io.CopyBuffer(blobWriter, tmpReader, copyBuffer)
-				tmpReader.Close()
-				blobWriter.Close()
-				if err != nil {
-					c.blobCache.Del(compressedSha)
-					return err
-				}
-				log.Printf("Stargz Allotment %d/%d %s [CREATED] \n", a.Row, a.Col, compressedSha)
-			}
+			log.Printf("Stargz Allotment %d/%d %s [CREATED] \n", a.Row, a.Col, compressedSha)
 		} else {
 			// For standard gzip, calculate DiffID from the original tar
 			// (unlike stargz, gzip decompression produces the exact same tar)

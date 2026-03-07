@@ -15,6 +15,7 @@ import (
 	"github.com/2DFS/2dfs-builder/filesystem"
 	"github.com/2DFS/2dfs-builder/oci"
 	"github.com/jedib0t/go-pretty/v6/table"
+	v1spec "github.com/opencontainers/image-spec/specs-go/v1"
 	"github.com/spf13/cobra"
 )
 
@@ -97,6 +98,77 @@ var tableStyle = table.Style{
 	},
 }
 
+func formatSize(bytes int64) string {
+	const unit = 1024
+	if bytes < unit {
+		return fmt.Sprintf("%d B", bytes)
+	}
+	div, exp := int64(unit), 0
+	for n := bytes / unit; n >= unit; n /= unit {
+		div *= unit
+		exp++
+	}
+	return fmt.Sprintf("%.1f %cB", float64(bytes)/float64(div), "KMGTPE"[exp])
+}
+
+func totalImageSize(idx v1spec.Index, blobCache cache.CacheStore) (int64, error) {
+	seen := make(map[string]struct{})
+	var total int64
+	for _, m := range idx.Manifests {
+		blobReader, err := blobCache.Get(m.Digest.Encoded())
+		if err != nil {
+			return 0, err
+		}
+		manifest, _, _, err := oci.ReadManifest(blobReader)
+		blobReader.Close()
+		if err != nil {
+			return 0, err
+		}
+		if _, ok := seen[manifest.Config.Digest.Encoded()]; !ok {
+			seen[manifest.Config.Digest.Encoded()] = struct{}{}
+			total += manifest.Config.Size
+		}
+		for _, l := range manifest.Layers {
+			if _, ok := seen[l.Digest.Encoded()]; ok {
+				continue
+			}
+			seen[l.Digest.Encoded()] = struct{}{}
+			if l.MediaType == oci.TwoDfsMediaType {
+				fieldReader, err := blobCache.Get(l.Digest.Encoded())
+				if err != nil {
+					return 0, err
+				}
+				fieldBytes, err := io.ReadAll(fieldReader)
+				fieldReader.Close()
+				if err != nil {
+					return 0, err
+				}
+				field, err := filesystem.GetField().Unmarshal(string(fieldBytes))
+				if err != nil {
+					return 0, err
+				}
+				for allotment := range field.IterateAllotments() {
+					if allotment.Digest == "" {
+						continue
+					}
+					if _, ok := seen[allotment.Digest]; ok {
+						continue
+					}
+					seen[allotment.Digest] = struct{}{}
+					size, err := blobCache.GetSize(allotment.Digest)
+					if err != nil {
+						return 0, err
+					}
+					total += size
+				}
+			} else {
+				total += l.Size
+			}
+		}
+	}
+	return total, nil
+}
+
 func listImages() error {
 
 	indexCacheStore, err := cache.NewCacheStore(IndexStorePath)
@@ -118,7 +190,7 @@ func listImages() error {
 
 	outTable := table.NewWriter()
 	outTable.SetOutputMirror(os.Stdout)
-	outTable.AppendHeader(table.Row{"#", "Url", "Tag", "Type", "Reference"})
+	outTable.AppendHeader(table.Row{"#", "Url", "Tag", "Type", "Size", "Reference"})
 	outTable.AppendSeparator()
 
 	for i, hash := range indexHashList {
@@ -150,10 +222,15 @@ func listImages() error {
 				break
 			}
 		}
+
+		size, err := totalImageSize(idx, blobCacheStore)
+		if err != nil {
+			return err
+		}
+
 		imageUrl := idx.Annotations[oci.ImageNameAnnotation]
-		//keep only last part of the url
 		imageTag := idx.Manifests[0].Annotations["org.opencontainers.image.version"]
-		outTable.AppendRow([]interface{}{i, imageUrl, imageTag, imageType, hash})
+		outTable.AppendRow([]interface{}{i, imageUrl, imageTag, imageType, formatSize(size), hash})
 	}
 
 	outTable.SetStyle(tableStyle)

@@ -76,4 +76,4 @@ require (
 	google.golang.org/protobuf v1.33.0 // indirect
 )
 
-replace github.com/containerd/stargz-snapshotter/estargz => github.com/bohdangarchu/stargz-snapshotter/estargz v0.0.0-20260205161008-2bfe7b7274b4
+replace github.com/containerd/stargz-snapshotter/estargz => github.com/2DFS/stargz-snapshotter/estargz v0.0.0-20260306160759-abad8b978047

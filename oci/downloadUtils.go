@@ -124,6 +124,35 @@ func DownloadIndex(image OciImageLink) (v1.Index, error) {
 		return idx, nil
 	}
 
+	// Single-arch images have no index — the registry returns the manifest directly.
+	// Wrap it in a synthetic index so the rest of the pipeline can handle it uniformly.
+	if indexResult.Header.Get("Content-Type") == v1.MediaTypeImageManifest {
+		defer indexResult.Body.Close()
+		manifest, msize, mdigest, err := ReadManifest(indexResult.Body)
+		if err != nil {
+			return v1.Index{}, fmt.Errorf("error getting manifest: %v", err)
+		}
+		parsedDigest, err := digest.Parse(mdigest)
+		if err != nil {
+			return v1.Index{}, err
+		}
+		platform := manifest.Config.Platform
+		if platform == nil {
+			platform = &v1.Platform{Architecture: "amd64", OS: "linux"}
+		}
+		idx := v1.Index{
+			MediaType: v1.MediaTypeImageIndex,
+			Manifests: []v1.Descriptor{{
+				MediaType: v1.MediaTypeImageManifest,
+				Digest:    parsedDigest,
+				Size:      msize,
+				Platform:  platform,
+			}},
+		}
+		idx.SchemaVersion = 2
+		return idx, nil
+	}
+
 	index, err := ReadIndex(indexResult.Body)
 	if index.MediaType != v1.MediaTypeImageIndex {
 		return v1.Index{}, fmt.Errorf("invalid index media type: %s", index.MediaType)

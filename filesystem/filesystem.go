@@ -19,6 +19,9 @@ func (f *TwoDFilesystem) AddAllotment(allotment Allotment) Field {
 	f.genAllotments(allotment.Row, allotment.Col)
 	f.Rows[allotment.Row].Allotments[allotment.Col].Digest = allotment.Digest
 	f.Rows[allotment.Row].Allotments[allotment.Col].DiffID = allotment.DiffID
+	f.Rows[allotment.Row].Allotments[allotment.Col].TOCDigest = allotment.TOCDigest
+	f.Rows[allotment.Row].Allotments[allotment.Col].UncompressedSize = allotment.UncompressedSize
+	f.Rows[allotment.Row].Allotments[allotment.Col].IsStargz = allotment.IsStargz
 	return f
 }
 

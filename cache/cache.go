@@ -1,6 +1,7 @@
 package cache
 
 import (
+	"crypto/sha256"
 	"fmt"
 	"io"
 	"os"
@@ -22,6 +23,8 @@ type CacheStore interface {
 	GetSize(digest string) (int64, error)
 	// Add generates the empty cache entry and returns its writer
 	Add(digest string) (io.WriteCloser, error)
+	// AddFromReader writes reader to cache in one pass, computing the digest on the fly (avoids a temp file re-read)
+	AddFromReader(reader io.Reader) (string, error)
 	// Del removes the entry from the store
 	Del(digest string)
 	// Check integrity based on digest
@@ -80,6 +83,34 @@ func (b *cachestore) Add(digest string) (io.WriteCloser, error) {
 		return nil, err
 	}
 	return blobfile, nil
+}
+
+func (b *cachestore) AddFromReader(reader io.Reader) (string, error) {
+	tmpFile, err := os.CreateTemp(b.path, "tmp-*")
+	if err != nil {
+		return "", fmt.Errorf("failed to create temp file: %w", err)
+	}
+	hasher := sha256.New()
+	_, err = io.Copy(io.MultiWriter(hasher, tmpFile), reader)
+	tmpFile.Close()
+	if err != nil {
+		os.Remove(tmpFile.Name())
+		return "", fmt.Errorf("failed to write to temp file: %w", err)
+	}
+	digest := fmt.Sprintf("%x", hasher.Sum(nil))
+	dest := filepath.Join(b.path, digest)
+
+	b.mtx.Lock()
+	defer b.mtx.Unlock()
+	if _, err := os.Stat(dest); err == nil {
+		os.Remove(tmpFile.Name())
+		return digest, nil
+	}
+	if err := os.Rename(tmpFile.Name(), dest); err != nil {
+		os.Remove(tmpFile.Name())
+		return "", fmt.Errorf("failed to rename temp file: %w", err)
+	}
+	return digest, nil
 }
 
 func (b *cachestore) Del(digest string) {

@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"compress/gzip"
 	"context"
 	"encoding/json"
 	"io"
@@ -19,6 +20,9 @@ func init() {
 	buildCmd.Flags().BoolVar(&forcePull, "force-pull", false, "force pull the base image")
 	buildCmd.Flags().BoolVar(&forceHttp, "force-http", false, "force pull via http")
 	buildCmd.Flags().StringArrayVarP(&platfrorms, "platforms", "p", []string{}, "Filter the build platoforms. E.g. linux/amd64,linux/arm64. By default all the available platforms are used")
+	buildCmd.Flags().BoolVar(&enableStargz, "enable-stargz", false, "enable stargz compression for allotments")
+	buildCmd.Flags().IntVar(&stargzChunkSize, "stargz-chunk-size", 1024*1024, "chunk size for stargz compression in bytes")
+	buildCmd.Flags().IntVar(&stargzCompressionLevel, "stargz-compression-level", gzip.BestSpeed, "gzip compression level for stargz (1=fastest, 9=smallest)")
 	rootCmd.AddCommand(buildCmd)
 }
 
@@ -27,6 +31,9 @@ var forcePull bool
 var forceHttp bool
 var exportFormat string
 var platfrorms []string
+var enableStargz bool
+var stargzChunkSize int
+var stargzCompressionLevel int
 var buildCmd = &cobra.Command{
 	Use:   "build [base image] [target image]",
 	Short: "Build a 2dfs field from an oci image link",
@@ -68,11 +75,15 @@ func build(imgFrom string, imgTarget string) error {
 	if forceHttp {
 		oci.PullPushProtocol = "http"
 	}
-	ociImage, err := oci.NewImage(ctx, imgFrom, forcePull, platfrorms)
+	stargzOptions := oci.StargzOptions{
+		Enabled:          enableStargz,
+		ChunkSize:        stargzChunkSize,
+		CompressionLevel: stargzCompressionLevel,
+	}
+	ociImage, err := oci.NewImageWithStargzOptions(ctx, imgFrom, forcePull, platfrorms, stargzOptions)
 	if err != nil {
 		return err
 	}
-	log.Default().Println("Image index retrieved")
 
 	// add 2dfs field to the image
 	buildstart := time.Now().UnixMilli()

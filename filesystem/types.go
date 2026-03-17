@@ -7,10 +7,13 @@ import (
 )
 
 type Allotment struct {
-	Row    int    `json:"row"`
-	Col    int    `json:"col"`
-	Digest string `json:"digest"`
-	DiffID string `json:"diffid"`
+	Row              int    `json:"row"`
+	Col              int    `json:"col"`
+	Digest           string `json:"digest"`
+	DiffID           string `json:"diffid"`
+	TOCDigest        string `json:"tocDigest,omitempty"`
+	UncompressedSize int64  `json:"uncompressedSize,omitempty"`
+	IsStargz         bool   `json:"isStargz,omitempty"`
 }
 
 type Cols struct {

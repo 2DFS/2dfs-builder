@@ -1,7 +1,15 @@
 package main
 
-import "github.com/2DFS/2dfs-builder/cmd"
+import (
+	"fmt"
+	"os"
+
+	"github.com/2DFS/2dfs-builder/cmd"
+)
 
 func main() {
-	cmd.Execute()
+	if err := cmd.Execute(); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
 }

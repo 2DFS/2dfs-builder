@@ -19,6 +19,9 @@ func init() {
 	buildCmd.Flags().BoolVar(&forcePull, "force-pull", false, "force pull the base image")
 	buildCmd.Flags().BoolVar(&forceHttp, "force-http", false, "force pull via http")
 	buildCmd.Flags().StringArrayVarP(&platfrorms, "platforms", "p", []string{}, "Filter the build platoforms. E.g. linux/amd64,linux/arm64. By default all the available platforms are used")
+	buildCmd.Flags().StringVar(&remoteCacheRegistry, "remote-cache-registry", "", "remote cache registry host (e.g. localhost:5000)")
+	buildCmd.Flags().StringVar(&remoteCacheRepository, "remote-cache-repository", "", "remote cache repository e.g. 2dfs/cache")
+	buildCmd.Flags().BoolVar(&remoteCacheInsecure, "remote-cache-insecure", false, "allow insecure remote cache registry access")
 	rootCmd.AddCommand(buildCmd)
 }
 
@@ -26,6 +29,9 @@ var buildFile string
 var forcePull bool
 var forceHttp bool
 var exportFormat string
+var remoteCacheRegistry string
+var remoteCacheRepository string
+var remoteCacheInsecure bool
 var platfrorms []string
 var buildCmd = &cobra.Command{
 	Use:   "build [base image] [target image]",
@@ -63,6 +69,9 @@ func build(imgFrom string, imgTarget string) error {
 	ctx = context.WithValue(ctx, oci.IndexStoreContextKey, IndexStorePath)
 	ctx = context.WithValue(ctx, oci.BlobStoreContextKey, BlobStorePath)
 	ctx = context.WithValue(ctx, oci.KeyStoreContextKey, KeysStorePath)
+	ctx = context.WithValue(ctx, oci.RemoteCacheRegistryContextKey, remoteCacheRegistry)
+	ctx = context.WithValue(ctx, oci.RemoteCacheRepositoryContextKey, remoteCacheRepository)
+	ctx = context.WithValue(ctx, oci.RemoteCacheInsecureContextKey, remoteCacheInsecure)
 	log.Default().Println("Getting Image")
 	oci.PullPushProtocol = "https"
 	if forceHttp {

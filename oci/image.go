@@ -34,6 +34,12 @@ const (
 	BlobStoreContextKey contextKeyType = "blobStore"
 	// KeyStoreContextKey is the context key for the blob store
 	KeyStoreContextKey contextKeyType = "keyStore"
+	// RemoteCacheRegistryContextKey is the context key for the remote cache registry
+	RemoteCacheRegistryContextKey contextKeyType = "remoteCacheRegistry"
+	// RemoteCacheRepositoryContextKey is the context key for the remote cache repository
+	RemoteCacheRepositoryContextKey contextKeyType = "remoteCacheRepository"
+	// RemoteCacheInsecureContextKey is the context key for allowing insecure remote cache registry access
+	RemoteCacheInsecureContextKey contextKeyType = "remoteCacheInsecure"
 	// 2dfs media type
 	TwoDfsMediaType = "application/vnd.oci.image.layer.v1.2dfs.field"
 	// image name annotation
@@ -61,6 +67,7 @@ type containerImage struct {
 	indexCache     cache.CacheStore
 	blobCache      cache.CacheStore
 	keyDigestCache cache.CacheStore
+	remoteCache    cache.RemoteCache
 	field          filesystem.Field
 	manifests      []v1.Manifest
 	configs        []v1.Image
@@ -134,10 +141,39 @@ func NewImage(ctx context.Context, url string, forcepull bool, platforms []strin
 		return nil, err
 	}
 
+	// Create remote cache if it is flagged to be used
+	var remoteCache cache.RemoteCache
+	ctxRemoteCacheRegistry := ctx.Value(RemoteCacheRegistryContextKey)
+	ctxRemoteCacheRepository := ctx.Value(RemoteCacheRepositoryContextKey)
+	ctxRemoteCacheInsecure := ctx.Value(RemoteCacheInsecureContextKey)
+
+	remoteInsecure := false
+	if ctxRemoteCacheInsecure != nil {
+		insecureValue, okInsecure := ctxRemoteCacheInsecure.(bool)
+		if !okInsecure {
+			return nil, fmt.Errorf("invalid remote cache insecure value in context")
+		}
+		remoteInsecure = insecureValue
+	}
+
+	if ctxRemoteCacheRegistry != nil && ctxRemoteCacheRepository != nil {
+		remoteRegistry, okRegistry := ctxRemoteCacheRegistry.(string)
+		remoteRepository, okRepository := ctxRemoteCacheRepository.(string)
+
+		if !okRegistry || !okRepository {
+			return nil, fmt.Errorf("invalid remote cache registry or repository value in context")
+		}
+
+		if remoteRegistry != "" && remoteRepository != "" {
+			remoteCache = cache.NewRemoteCache(remoteRegistry, remoteRepository, remoteInsecure)
+		}
+	}
+
 	img := &containerImage{
 		indexCache:     imgstore,
 		blobCache:      blobstore,
 		keyDigestCache: blobdigeststore,
+		remoteCache:    remoteCache,
 		manifests:      []v1.Manifest{},
 		configs:        []v1.Image{},
 		platforms:      platforms,
@@ -909,6 +945,12 @@ func (c *containerImage) buildAllotment(a filesystem.AllotmentManifest, f filesy
 		}
 	}
 
+	// push blob to remote cache if needed
+	err = c.pushRemoteBlobIfNeeded(compressedSha)
+	if err != nil {
+		return err
+	}
+
 	// add allotments
 	f.AddAllotment(filesystem.Allotment{
 		Row:    a.Row,
@@ -917,6 +959,36 @@ func (c *containerImage) buildAllotment(a filesystem.AllotmentManifest, f filesy
 		DiffID: diffID,
 	})
 
+	return nil
+}
+
+func (c *containerImage) pushRemoteBlobIfNeeded(compressedSha string) error {
+	if c.remoteCache == nil {
+		return nil
+	}
+
+	exists, err := c.remoteCache.CheckBlob(compressedSha)
+	if err != nil {
+		return err
+	}
+
+	if exists {
+		log.Printf("Blob %s is already [CACHED] in remote registry\n", compressedSha)
+		return nil
+	}
+
+	reader, err := c.blobCache.Get(compressedSha)
+	if err != nil {
+		return fmt.Errorf("Failed to read local blob %s for remote cache push: %w", compressedSha, err)
+	}
+	defer reader.Close()
+
+	err = c.remoteCache.PushBlob(compressedSha, reader)
+	if err != nil {
+		return err
+	}
+
+	log.Printf("Blob %s [PUSHED] to remote cache\n", compressedSha)
 	return nil
 }
 

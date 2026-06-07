@@ -8,6 +8,7 @@ import (
 	"os"
 	"strings"
 
+	"github.com/google/go-containerregistry/pkg/authn"
 	"github.com/google/go-containerregistry/pkg/name"
 	v1 "github.com/google/go-containerregistry/pkg/v1"
 	"github.com/google/go-containerregistry/pkg/v1/empty"
@@ -29,6 +30,7 @@ type remoteCache struct {
 	registryURL string
 	repository  string
 	insecure    bool
+	options     []remote.Option
 }
 
 func NewRemoteCache(registryURL, repository string, insecure bool) RemoteCache {
@@ -36,6 +38,9 @@ func NewRemoteCache(registryURL, repository string, insecure bool) RemoteCache {
 		registryURL: registryURL,
 		repository:  repository,
 		insecure:    insecure,
+		options: []remote.Option{
+			remote.WithAuthFromKeychain(authn.DefaultKeychain),
+		},
 	}
 }
 
@@ -45,7 +50,7 @@ func (c *remoteCache) CheckBlob(compressedSha string) (bool, error) {
 		return false, err
 	}
 
-	img, err := remote.Image(ref)
+	img, err := remote.Image(ref, c.options...)
 	if err != nil {
 		var transportErr *transport.Error
 		if errors.As(err, &transportErr) && transportErr.StatusCode == http.StatusNotFound {
@@ -77,7 +82,7 @@ func (c *remoteCache) PushBlob(compressedSha string, r io.Reader) error {
 		return err
 	}
 
-	err = remote.Write(ref, img)
+	err = remote.Write(ref, img, c.options...)
 	if err != nil {
 		return fmt.Errorf("Failed to push blob image to remote cache: %w", err)
 	}

@@ -76,6 +76,20 @@ func TestBlobTagNormalizesDashedDigest(t *testing.T) {
 	}
 }
 
+func TestBlobTagPlainDigest(t *testing.T) {
+	got := blobTag("abc123")
+	want := "blob-sha256-abc123"
+
+	t.Logf("TEST: BlobTagPlainDigest")
+	t.Logf("input digest: %s", "abc123")
+	t.Logf("expected tag: %s", want)
+	t.Logf("output tag: %s", got)
+
+	if got != want {
+		t.Fatalf("expected %q, got %q", want, got)
+	}
+}
+
 func TestCreateBlobImageCreatesSingleLayerImage(t *testing.T) {
 	blob := createTestTarGz(t, "hello.txt", []byte("hello 2dfs"))
 	compressedSha := sha256Hex(blob)
@@ -206,5 +220,187 @@ func logTarGzContents(t *testing.T, data []byte) {
 		t.Logf("layer tar entry name: %s", header.Name)
 		t.Logf("layer tar entry size: %d bytes", header.Size)
 		t.Logf("layer tar entry content: %s", string(content))
+	}
+}
+
+func TestNormalizeHexDigest(t *testing.T) {
+	tests := []struct {
+		name string
+		in   string
+		want string
+	}{
+		{
+			name: "plain hex digest",
+			in:   "abc123",
+			want: "abc123",
+		},
+		{
+			name: "sha256 colon prefix",
+			in:   "sha256:abc123",
+			want: "abc123",
+		},
+		{
+			name: "sha256 dash prefix",
+			in:   "sha256-abc123",
+			want: "abc123",
+		},
+		{
+			name: "surrounding whitespace",
+			in:   "  sha256:abc123  ",
+			want: "abc123",
+		},
+	}
+
+	t.Logf("TEST: NormalizeHexDigest")
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := normalizeHexDigest(tt.in)
+
+			t.Logf("case: %s", tt.name)
+			t.Logf("input digest: %q", tt.in)
+			t.Logf("expected normalized digest: %q", tt.want)
+			t.Logf("output normalized digest: %q", got)
+
+			if got != tt.want {
+				t.Fatalf("normalizeHexDigest(%q) = %q, want %q", tt.in, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestBlobReferenceBuildsExpectedReference(t *testing.T) {
+	c := &remoteCache{
+		registryURL: "localhost:5000",
+		repository:  "2dfs/cache",
+		insecure:    true,
+	}
+
+	ref, err := c.blobReference("sha256:abc123")
+	if err != nil {
+		t.Fatalf("blobReference() returned error: %v", err)
+	}
+
+	wantName := "localhost:5000/2dfs/cache:blob-sha256-abc123"
+	wantIdentifier := "blob-sha256-abc123"
+
+	t.Logf("TEST: BlobReferenceBuildsExpectedReference")
+	t.Logf("registry URL: %s", c.registryURL)
+	t.Logf("repository: %s", c.repository)
+	t.Logf("input digest: %s", "sha256:abc123")
+	t.Logf("expected reference name: %s", wantName)
+	t.Logf("output reference name: %s", ref.Name())
+	t.Logf("expected identifier: %s", wantIdentifier)
+	t.Logf("output identifier: %s", ref.Identifier())
+
+	if ref.Name() != wantName {
+		t.Fatalf("blobReference().Name() = %q, want %q", ref.Name(), wantName)
+	}
+
+	if ref.Identifier() != wantIdentifier {
+		t.Fatalf("blobReference().Identifier() = %q, want %q", ref.Identifier(), wantIdentifier)
+	}
+}
+
+func TestBlobReferenceTrimsSlashes(t *testing.T) {
+	c := &remoteCache{
+		registryURL: "localhost:5000/",
+		repository:  "/2dfs/cache",
+		insecure:    true,
+	}
+
+	ref, err := c.blobReference("abc123")
+	if err != nil {
+		t.Fatalf("blobReference() returned error: %v", err)
+	}
+
+	wantName := "localhost:5000/2dfs/cache:blob-sha256-abc123"
+
+	t.Logf("TEST: BlobReferenceTrimsSlashes")
+	t.Logf("registry URL: %s", c.registryURL)
+	t.Logf("repository: %s", c.repository)
+	t.Logf("input digest: %s", "abc123")
+	t.Logf("expected reference name: %s", wantName)
+	t.Logf("output reference name: %s", ref.Name())
+
+	if ref.Name() != wantName {
+		t.Fatalf("blobReference().Name() = %q, want %q", ref.Name(), wantName)
+	}
+}
+
+type failingReader struct{}
+
+func (f failingReader) Read(_ []byte) (int, error) {
+	return 0, io.ErrUnexpectedEOF
+}
+
+func TestCreateBlobImageReturnsErrorWhenReaderFails(t *testing.T) {
+	c := &remoteCache{
+		registryURL: "example.com",
+		repository:  "project/cache",
+	}
+
+	img, cleanup, err := c.createBlobImage("abc123", failingReader{})
+	if cleanup != nil {
+		defer cleanup()
+	}
+
+	t.Logf("TEST: CreateBlobImageReturnsErrorWhenReaderFails")
+	t.Logf("input reader: failingReader")
+	t.Logf("expected result: error")
+	t.Logf("output error: %v", err)
+
+	if err == nil {
+		t.Fatal("createBlobImage() expected error, got nil")
+	}
+
+	if img != nil {
+		t.Fatal("createBlobImage() returned image even though reader failed")
+	}
+}
+
+func TestCreateBlobImageAcceptsSha256PrefixedDigest(t *testing.T) {
+	blob := createTestTarGz(t, "hello.txt", []byte("hello 2dfs"))
+	compressedSha := sha256Hex(blob)
+	prefixedDigest := "sha256:" + compressedSha
+
+	t.Logf("TEST: CreateBlobImageAcceptsSha256PrefixedDigest")
+	t.Logf("input file name: %s", "hello.txt")
+	t.Logf("input file content: %s", "hello 2dfs")
+	t.Logf("plain compressed sha: %s", compressedSha)
+	t.Logf("prefixed compressed sha: %s", prefixedDigest)
+
+	c := &remoteCache{
+		registryURL: "example.com",
+		repository:  "project/cache",
+	}
+
+	img, cleanup, err := c.createBlobImage(prefixedDigest, bytes.NewReader(blob))
+	if cleanup != nil {
+		defer cleanup()
+	}
+	if err != nil {
+		t.Fatalf("createBlobImage failed with sha256-prefixed digest: %v", err)
+	}
+
+	layers, err := img.Layers()
+	if err != nil {
+		t.Fatalf("failed to read image layers: %v", err)
+	}
+
+	if len(layers) != 1 {
+		t.Fatalf("expected 1 layer, got %d", len(layers))
+	}
+
+	layerDigest, err := layers[0].Digest()
+	if err != nil {
+		t.Fatalf("failed to read layer digest: %v", err)
+	}
+
+	t.Logf("expected layer digest hex: %s", compressedSha)
+	t.Logf("output layer digest hex: %s", layerDigest.Hex)
+
+	if layerDigest.Hex != compressedSha {
+		t.Fatalf("expected layer digest %s, got %s", compressedSha, layerDigest.Hex)
 	}
 }

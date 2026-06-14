@@ -142,31 +142,9 @@ func NewImage(ctx context.Context, url string, forcepull bool, platforms []strin
 	}
 
 	// Create remote cache if it is flagged to be used
-	var remoteCache cache.RemoteCache
-	ctxRemoteCacheRegistry := ctx.Value(RemoteCacheRegistryContextKey)
-	ctxRemoteCacheRepository := ctx.Value(RemoteCacheRepositoryContextKey)
-	ctxRemoteCacheInsecure := ctx.Value(RemoteCacheInsecureContextKey)
-
-	remoteInsecure := false
-	if ctxRemoteCacheInsecure != nil {
-		insecureValue, okInsecure := ctxRemoteCacheInsecure.(bool)
-		if !okInsecure {
-			return nil, fmt.Errorf("invalid remote cache insecure value in context")
-		}
-		remoteInsecure = insecureValue
-	}
-
-	if ctxRemoteCacheRegistry != nil && ctxRemoteCacheRepository != nil {
-		remoteRegistry, okRegistry := ctxRemoteCacheRegistry.(string)
-		remoteRepository, okRepository := ctxRemoteCacheRepository.(string)
-
-		if !okRegistry || !okRepository {
-			return nil, fmt.Errorf("invalid remote cache registry or repository value in context")
-		}
-
-		if remoteRegistry != "" && remoteRepository != "" {
-			remoteCache = cache.NewRemoteCache(remoteRegistry, remoteRepository, remoteInsecure)
-		}
+	remoteCache, err := newRemoteCacheFromContext(ctx)
+	if err != nil {
+		return nil, err
 	}
 
 	img := &containerImage{
@@ -199,6 +177,37 @@ func NewImage(ctx context.Context, url string, forcepull bool, platforms []strin
 
 	return img, nil
 
+}
+
+func newRemoteCacheFromContext(ctx context.Context) (cache.RemoteCache, error) {
+	ctxRemoteCacheRegistry := ctx.Value(RemoteCacheRegistryContextKey)
+	ctxRemoteCacheRepository := ctx.Value(RemoteCacheRepositoryContextKey)
+	ctxRemoteCacheInsecure := ctx.Value(RemoteCacheInsecureContextKey)
+
+	remoteInsecure := false
+	if ctxRemoteCacheInsecure != nil {
+		insecureValue, okInsecure := ctxRemoteCacheInsecure.(bool)
+		if !okInsecure {
+			return nil, fmt.Errorf("invalid remote cache insecure value in context")
+		}
+		remoteInsecure = insecureValue
+	}
+
+	if ctxRemoteCacheRegistry == nil || ctxRemoteCacheRepository == nil {
+		return nil, nil
+	}
+
+	remoteRegistry, okRegistry := ctxRemoteCacheRegistry.(string)
+	remoteRepository, okRepository := ctxRemoteCacheRepository.(string)
+	if !okRegistry || !okRepository {
+		return nil, fmt.Errorf("invalid remote cache registry or repository value in context")
+	}
+
+	if remoteRegistry == "" || remoteRepository == "" {
+		return nil, nil
+	}
+
+	return cache.NewRemoteCache(remoteRegistry, remoteRepository, remoteInsecure), nil
 }
 
 func GetLocalImage(ctx context.Context, reference string) (Image, error) {

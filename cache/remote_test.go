@@ -8,6 +8,8 @@ import (
 	"encoding/hex"
 	"io"
 	"testing"
+
+	"github.com/google/go-containerregistry/pkg/v1/empty"
 )
 
 func createTestTarGz(t *testing.T, name string, content []byte) []byte {
@@ -402,5 +404,64 @@ func TestCreateBlobImageAcceptsSha256PrefixedDigest(t *testing.T) {
 
 	if layerDigest.Hex != compressedSha {
 		t.Fatalf("expected layer digest %s, got %s", compressedSha, layerDigest.Hex)
+	}
+}
+
+func TestValidateBlobImageAcceptsMatchingSingleLayerImage(t *testing.T) {
+	blob := createTestTarGz(t, "hello.txt", []byte("hello 2dfs"))
+	compressedSha := sha256Hex(blob)
+
+	c := &remoteCache{
+		registryURL: "example.com",
+		repository:  "project/cache",
+	}
+
+	img, cleanup, err := c.createBlobImage(compressedSha, bytes.NewReader(blob))
+	if cleanup != nil {
+		defer cleanup()
+	}
+	if err != nil {
+		t.Fatalf("createBlobImage failed: %v", err)
+	}
+
+	err = c.validateBlobImage(img, compressedSha)
+	if err != nil {
+		t.Fatalf("validateBlobImage() expected success, got error: %v", err)
+	}
+}
+
+func TestValidateBlobImageRejectsDigestMismatch(t *testing.T) {
+	blob := createTestTarGz(t, "hello.txt", []byte("hello 2dfs"))
+	compressedSha := sha256Hex(blob)
+	wrongDigest := "deadbeef"
+
+	c := &remoteCache{
+		registryURL: "example.com",
+		repository:  "project/cache",
+	}
+
+	img, cleanup, err := c.createBlobImage(compressedSha, bytes.NewReader(blob))
+	if cleanup != nil {
+		defer cleanup()
+	}
+	if err != nil {
+		t.Fatalf("createBlobImage failed: %v", err)
+	}
+
+	err = c.validateBlobImage(img, wrongDigest)
+	if err == nil {
+		t.Fatalf("validateBlobImage() expected digest mismatch error, got nil")
+	}
+}
+
+func TestValidateBlobImageRejectsEmptyImage(t *testing.T) {
+	c := &remoteCache{
+		registryURL: "example.com",
+		repository:  "project/cache",
+	}
+
+	err := c.validateBlobImage(empty.Image, "deadbeef")
+	if err == nil {
+		t.Fatalf("validateBlobImage() expected error for empty image, got nil")
 	}
 }

@@ -152,8 +152,32 @@ func validateLayerDigest(layer v1.Layer, expectedDigest string) error {
 }
 
 func (c *remoteCache) PullBlob(compressedSha string) (io.ReadCloser, error) {
-	//TODO: return the blob in the remote cache as a reader
-	return nil, nil
+	ref, err := c.blobReference(compressedSha)
+	if err != nil {
+		return nil, err
+	}
+
+	img, err := remote.Image(ref, c.options...)
+	if err != nil {
+		return nil, fmt.Errorf("Failed to fetch blob from remote cache: %w", err)
+	}
+
+	err = c.validateBlobImage(img, compressedSha)
+	if err != nil {
+		return nil, fmt.Errorf("Invalid blob image in remote cache: %w", err)
+	}
+
+	layers, err := img.Layers()
+	if err != nil {
+		return nil, fmt.Errorf("Failed to get blob layers: %w", err)
+	}
+
+	reader, err := layers[0].Compressed()
+	if err != nil {
+		return nil, fmt.Errorf("Failed to open compressed blob layer from remote cache: %w", err)
+	}
+
+	return reader, nil
 }
 
 // Helper to normalize the tag for the blob

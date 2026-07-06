@@ -7,8 +7,10 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"io"
+	"net/http/httptest"
 	"testing"
 
+	"github.com/google/go-containerregistry/pkg/registry"
 	"github.com/google/go-containerregistry/pkg/v1/empty"
 )
 
@@ -48,6 +50,20 @@ func createTestTarGz(t *testing.T, name string, content []byte) []byte {
 func sha256Hex(data []byte) string {
 	sum := sha256.Sum256(data)
 	return hex.EncodeToString(sum[:])
+}
+
+func newTestRemoteCache(t *testing.T, repository string) RemoteCache {
+	t.Helper()
+
+	server := httptest.NewServer(registry.New())
+	t.Cleanup(server.Close)
+
+	registryURL := server.Listener.Addr().String()
+
+	t.Logf("test registry URL: %s", registryURL)
+	t.Logf("test repository: %s", repository)
+
+	return NewRemoteCache(registryURL, repository, true)
 }
 
 func TestBlobTagNormalizesDigest(t *testing.T) {
@@ -463,5 +479,70 @@ func TestValidateBlobImageRejectsEmptyImage(t *testing.T) {
 	err := c.validateBlobImage(empty.Image, "deadbeef")
 	if err == nil {
 		t.Fatalf("validateBlobImage() expected error for empty image, got nil")
+	}
+}
+
+func TestPullBlobReturnsOriginalCompressedBlobFromRegistry(t *testing.T) {
+	blob := createTestTarGz(t, "hello.txt", []byte("hello 2dfs"))
+	compressedSha := sha256Hex(blob)
+
+	t.Logf("TEST: PullBlobReturnsOriginalCompressedBlobFromRegistry")
+	t.Logf("input file name: %s", "hello.txt")
+	t.Logf("input file content: %s", "hello 2dfs")
+	t.Logf("input blob size: %d bytes", len(blob))
+	t.Logf("expected compressed sha: %s", compressedSha)
+
+	c := newTestRemoteCache(t, "2dfs/cache-pull-test")
+
+	err := c.PushBlob(compressedSha, bytes.NewReader(blob))
+	if err != nil {
+		t.Fatalf("PushBlob() error: %v", err)
+	}
+
+	reader, err := c.PullBlob(compressedSha)
+	if err != nil {
+		t.Fatalf("PullBlob() error: %v", err)
+	}
+	defer reader.Close()
+
+	pulledBlob, err := io.ReadAll(reader)
+	if err != nil {
+		t.Fatalf("ReadAll() error: %v", err)
+	}
+
+	t.Logf("expected pulled blob size: %d bytes", len(blob))
+	t.Logf("output pulled blob size: %d bytes", len(pulledBlob))
+	t.Logf("expected pulled bytes equal original blob: %t", true)
+	t.Logf("output pulled bytes equal original blob: %t", bytes.Equal(pulledBlob, blob))
+
+	if !bytes.Equal(pulledBlob, blob) {
+		t.Fatalf("pulled blob bytes do not match original blob")
+	}
+}
+
+func TestPullBlobReturnsErrorWhenBlobIsMissing(t *testing.T) {
+	missingDigest := "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+
+	t.Logf("TEST: PullBlobReturnsErrorWhenBlobIsMissing")
+	t.Logf("input missing digest: %s", missingDigest)
+	t.Logf("expected result: error")
+
+	c := newTestRemoteCache(t, "2dfs/cache-pull-missing-test")
+
+	reader, err := c.PullBlob(missingDigest)
+
+	t.Logf("output reader is nil: %t", reader == nil)
+	t.Logf("output error: %v", err)
+
+	if err == nil {
+		if reader != nil {
+			reader.Close()
+		}
+		t.Fatalf("PullBlob() expected error for missing blob, got nil")
+	}
+
+	if reader != nil {
+		reader.Close()
+		t.Fatalf("PullBlob() returned reader even though blob was missing")
 	}
 }

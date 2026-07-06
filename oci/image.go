@@ -896,6 +896,20 @@ func (c *containerImage) buildAllotment(a filesystem.AllotmentManifest, f filesy
 		return "", ""
 	}()
 
+	// Check if remote cache has the blob
+	if compressedSha != "" {
+		available, err := c.pullRemoteBlobToLocalCache(compressedSha)
+		if err != nil {
+			return err
+		}
+
+		if !available {
+			log.Printf("Blob %s was [NOT FOUND] in local or remote cache, rebuilding allotment\n", compressedSha)
+			compressedSha = ""
+			diffID = ""
+		}
+	}
+
 	// if no cache entry found, generate one
 	if compressedSha == "" {
 		log.Printf("File %s [COPY] \n", a.Src)
@@ -999,6 +1013,68 @@ func (c *containerImage) pushRemoteBlobIfNeeded(compressedSha string) error {
 
 	log.Printf("Blob %s [PUSHED] to remote cache\n", compressedSha)
 	return nil
+}
+
+func (c *containerImage) pullRemoteBlobToLocalCache(compressedSha string) (bool, error) {
+	if c.blobCache.Check(compressedSha) {
+		return true, nil
+	}
+
+	if c.remoteCache == nil {
+		log.Printf("Blob %s [MISSING] in local cache and no remote cache configured\n", compressedSha)
+		return false, nil
+	}
+
+	log.Printf("Blob %s [MISSING] in local cache, trying remote cache restore\n", compressedSha)
+
+	reader, err := c.remoteCache.PullBlob(compressedSha)
+	if err != nil {
+		if reader != nil {
+			_ = reader.Close()
+		}
+		log.Printf("Blob %s remote cache restore [MISS]: %v\n", compressedSha, err)
+		return false, nil
+	}
+	defer reader.Close()
+
+	blobWriter, err := c.blobCache.Add(compressedSha)
+	if err != nil {
+		return false, fmt.Errorf("Failed to create local blob cache entry for remote restore: %s:%w", compressedSha, err)
+	}
+
+	writerClosed := false
+	defer func() {
+		if !writerClosed {
+			_ = blobWriter.Close()
+			c.blobCache.Del(compressedSha)
+		}
+	}()
+
+	copyBuffer := make([]byte, 1024*1024)
+	_, err = io.CopyBuffer(blobWriter, reader, copyBuffer)
+
+	closeErr := blobWriter.Close()
+	writerClosed = true
+
+	if err != nil {
+		c.blobCache.Del(compressedSha)
+		log.Printf("Blob %s remote cache restore [FAILED]: %v\n", compressedSha, err)
+		return false, nil
+	}
+
+	if closeErr != nil {
+		c.blobCache.Del(compressedSha)
+		log.Printf("Blob %s remote cache restore [FAILED]: %v\n", compressedSha, closeErr)
+		return false, fmt.Errorf("Failed to close local blob cache entry after remote restore: %s: %w", compressedSha, closeErr)
+	}
+
+	if !c.blobCache.Check(compressedSha) {
+		c.blobCache.Del(compressedSha)
+		return false, fmt.Errorf("Restored blob %s failed local integrity check", compressedSha)
+	}
+
+	log.Printf("Blob %s [RESTORED] from remote cache\n", compressedSha)
+	return true, nil
 }
 
 func createFileWithDirs(p string) (*os.File, error) {

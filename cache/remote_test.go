@@ -6,7 +6,10 @@ import (
 	"compress/gzip"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
+	"errors"
 	"io"
+	"net/http"
 	"net/http/httptest"
 	"testing"
 
@@ -105,6 +108,53 @@ func TestBlobTagPlainDigest(t *testing.T) {
 
 	if got != want {
 		t.Fatalf("expected %q, got %q", want, got)
+	}
+}
+
+// Take a closer look to verify tests
+func TestKeyTagNormalizesDigest(t *testing.T) {
+	tests := []struct {
+		name string
+		in   string
+		want string
+	}{
+		{
+			name: "plain digest",
+			in:   "abc123",
+			want: "key-sha256-abc123",
+		},
+		{
+			name: "sha256 colon prefix",
+			in:   "sha256:abc123",
+			want: "key-sha256-abc123",
+		},
+		{
+			name: "sha256 dash prefix",
+			in:   "sha256-abc123",
+			want: "key-sha256-abc123",
+		},
+		{
+			name: "surrounding whitespace",
+			in:   "  sha256:abc123  ",
+			want: "key-sha256-abc123",
+		},
+	}
+
+	t.Logf("TEST: KeyTagNormalizesDigest")
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := keyTag(tt.in)
+
+			t.Logf("case: %s", tt.name)
+			t.Logf("input digest: %q", tt.in)
+			t.Logf("expected key tag: %q", tt.want)
+			t.Logf("output key tag: %q", got)
+
+			if got != tt.want {
+				t.Fatalf("keyTag(%q) = %q, want %q", tt.in, got, tt.want)
+			}
+		})
 	}
 }
 
@@ -320,6 +370,40 @@ func TestBlobReferenceBuildsExpectedReference(t *testing.T) {
 	}
 }
 
+// Take a closer look to verify tests
+func TestKeyReferenceBuildsExpectedReference(t *testing.T) {
+	c := &remoteCache{
+		registryURL: "localhost:5000",
+		repository:  "2dfs/cache",
+		insecure:    true,
+	}
+
+	ref, err := c.keyReference("sha256:abc123")
+	if err != nil {
+		t.Fatalf("keyReference() returned error: %v", err)
+	}
+
+	wantName := "localhost:5000/2dfs/cache:key-sha256-abc123"
+	wantIdentifier := "key-sha256-abc123"
+
+	t.Logf("TEST: KeyReferenceBuildsExpectedReference")
+	t.Logf("registry URL: %s", c.registryURL)
+	t.Logf("repository: %s", c.repository)
+	t.Logf("input digest: %s", "sha256:abc123")
+	t.Logf("expected reference name: %s", wantName)
+	t.Logf("output reference name: %s", ref.Name())
+	t.Logf("expected identifier: %s", wantIdentifier)
+	t.Logf("output identifier: %s", ref.Identifier())
+
+	if ref.Name() != wantName {
+		t.Fatalf("keyReference().Name() = %q, want %q", ref.Name(), wantName)
+	}
+
+	if ref.Identifier() != wantIdentifier {
+		t.Fatalf("keyReference().Identifier() = %q, want %q", ref.Identifier(), wantIdentifier)
+	}
+}
+
 func TestBlobReferenceTrimsSlashes(t *testing.T) {
 	c := &remoteCache{
 		registryURL: "localhost:5000/",
@@ -520,6 +604,49 @@ func TestPullBlobReturnsOriginalCompressedBlobFromRegistry(t *testing.T) {
 	}
 }
 
+// Take a closer look to verify tests
+func TestPushKeyPullKeyReturnsOriginalMetadataFromRegistry(t *testing.T) {
+	keyMetadata := []byte(`{"fileSha":"file-sha-test","dst":["./Dockerfile","./requirements.txt"],"compressedSha":"compressed-sha-test","diffID":"diff-id-test"}`)
+	keyDigest := sha256Hex([]byte("file-sha-test|./Dockerfile|./requirements.txt"))
+
+	t.Logf("TEST: PushKeyPullKeyReturnsOriginalMetadataFromRegistry")
+	t.Logf("input key digest: %s", keyDigest)
+	t.Logf("input key metadata: %s", string(keyMetadata))
+	t.Logf("input key metadata size: %d bytes", len(keyMetadata))
+
+	c := newTestRemoteCache(t, "2dfs/cache-key-test")
+
+	err := c.PushKey(keyDigest, bytes.NewReader(keyMetadata))
+	if err != nil {
+		t.Fatalf("PushKey() error: %v", err)
+	}
+
+	reader, err := c.PullKey(keyDigest)
+	if err != nil {
+		t.Fatalf("PullKey() error: %v", err)
+	}
+	defer reader.Close()
+
+	pulledMetadata, err := io.ReadAll(reader)
+	if err != nil {
+		t.Fatalf("ReadAll() error: %v", err)
+	}
+
+	t.Logf("expected pulled metadata size: %d bytes", len(keyMetadata))
+	t.Logf("output pulled metadata size: %d bytes", len(pulledMetadata))
+	t.Logf("expected pulled metadata equals original: %t", true)
+	t.Logf("output pulled metadata equals original: %t", bytes.Equal(pulledMetadata, keyMetadata))
+	t.Logf("output pulled metadata: %s", string(pulledMetadata))
+
+	if !bytes.Equal(pulledMetadata, keyMetadata) {
+		t.Fatalf("pulled key metadata does not match original metadata")
+	}
+
+	if !json.Valid(pulledMetadata) {
+		t.Fatalf("pulled key metadata is not valid JSON")
+	}
+}
+
 func TestPullBlobReturnsErrorWhenBlobIsMissing(t *testing.T) {
 	missingDigest := "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 
@@ -541,8 +668,89 @@ func TestPullBlobReturnsErrorWhenBlobIsMissing(t *testing.T) {
 		t.Fatalf("PullBlob() expected error for missing blob, got nil")
 	}
 
+	if !errors.Is(err, ErrRemoteCacheMiss) {
+		t.Fatalf("PullBlob() expected ErrRemoteCacheMiss, got: %v", err)
+	}
+
 	if reader != nil {
 		reader.Close()
 		t.Fatalf("PullBlob() returned reader even though blob was missing")
+	}
+}
+
+// Verification needed
+func TestPullKeyReturnsErrRemoteCacheMissWhenKeyIsMissing(t *testing.T) {
+	missingKeyDigest := "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+
+	t.Logf("TEST: PullKeyReturnsErrRemoteCacheMissWhenKeyIsMissing")
+	t.Logf("input missing key digest: %s", missingKeyDigest)
+	t.Logf("expected result: ErrRemoteCacheMiss")
+
+	c := newTestRemoteCache(t, "2dfs/cache-key-missing-test")
+
+	reader, err := c.PullKey(missingKeyDigest)
+
+	t.Logf("output reader is nil: %t", reader == nil)
+	t.Logf("output error: %v", err)
+
+	if err == nil {
+		if reader != nil {
+			reader.Close()
+		}
+		t.Fatalf("PullKey() expected error for missing key, got nil")
+	}
+
+	if !errors.Is(err, ErrRemoteCacheMiss) {
+		t.Fatalf("PullKey() expected ErrRemoteCacheMiss, got %v", err)
+	}
+
+	if reader != nil {
+		reader.Close()
+		t.Fatalf("PullKey() returned reader even though key was missing")
+	}
+}
+
+// Verification needed
+func TestPushKeyStoresKeyUnderKeyTagInRegistry(t *testing.T) {
+	server := httptest.NewServer(registry.New())
+	defer server.Close()
+
+	registryURL := server.Listener.Addr().String()
+	repository := "2dfs/cache-key-tag-test"
+	keyDigest := "abc123"
+	keyMetadata := []byte(`{"fileSha":"abc","dst":["./Dockerfile"],"compressedSha":"def","diffID":"ghi"}`)
+
+	t.Logf("TEST: PushKeyStoresKeyUnderKeyTagInRegistry")
+	t.Logf("test registry URL: %s", registryURL)
+	t.Logf("test repository: %s", repository)
+	t.Logf("input key digest: %s", keyDigest)
+	t.Logf("expected key tag: %s", "key-sha256-abc123")
+
+	c := NewRemoteCache(registryURL, repository, true)
+
+	err := c.PushKey(keyDigest, bytes.NewReader(keyMetadata))
+	if err != nil {
+		t.Fatalf("PushKey() error: %v", err)
+	}
+
+	resp, err := http.Get("http://" + registryURL + "/v2/" + repository + "/tags/list")
+	if err != nil {
+		t.Fatalf("failed to fetch registry tags: %v", err)
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("failed to read tags response: %v", err)
+	}
+
+	t.Logf("registry tags response: %s", string(body))
+
+	if !bytes.Contains(body, []byte("key-sha256-abc123")) {
+		t.Fatalf("expected registry tags to contain key-sha256-abc123")
+	}
+
+	if bytes.Contains(body, []byte("blob-sha256-abc123")) {
+		t.Fatalf("key was stored with blob tag instead of key tag")
 	}
 }

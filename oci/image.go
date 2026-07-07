@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"errors"
 
 	"log"
 
@@ -1032,14 +1033,19 @@ func (c *containerImage) pullRemoteBlobToLocalCache(compressedSha string) (bool,
 		if reader != nil {
 			_ = reader.Close()
 		}
-		log.Printf("Blob %s remote cache restore [MISS]: %v\n", compressedSha, err)
-		return false, nil
+
+		if errors.Is(err, cache.ErrRemoteCacheMiss) {
+			log.Printf("Blob %s remote cache restore [MISS]: %v\n", compressedSha, err)
+			return false, nil
+		}
+
+		return false, fmt.Errorf("Failed to pull blob %s from remote cache: %w", compressedSha, err)
 	}
 	defer reader.Close()
 
 	blobWriter, err := c.blobCache.Add(compressedSha)
 	if err != nil {
-		return false, fmt.Errorf("Failed to create local blob cache entry for remote restore: %s:%w", compressedSha, err)
+		return false, fmt.Errorf("Failed to create local blob cache entry for remote restore %s: %w", compressedSha, err)
 	}
 
 	writerClosed := false

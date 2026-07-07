@@ -15,15 +15,20 @@ import (
 	"github.com/google/go-containerregistry/pkg/v1/mutate"
 	"github.com/google/go-containerregistry/pkg/v1/remote"
 	"github.com/google/go-containerregistry/pkg/v1/remote/transport"
+	"github.com/google/go-containerregistry/pkg/v1/static"
 	"github.com/google/go-containerregistry/pkg/v1/tarball"
 	"github.com/google/go-containerregistry/pkg/v1/types"
 )
 
-// v1: Blobcache only, no metadata, no manifest, no referrers. keyCache is planned in v2
+var ErrRemoteCacheMiss = errors.New("remote cache entry not found")
+
 type RemoteCache interface {
 	CheckBlob(compressedSha string) (bool, error)
 	PushBlob(compressedSha string, r io.Reader) error
 	PullBlob(compressedSha string) (io.ReadCloser, error)
+
+	PushKey(keyDigest string, reader io.Reader) error
+	PullKey(keyDigest string) (io.ReadCloser, error)
 }
 
 type remoteCache struct {
@@ -52,9 +57,8 @@ func (c *remoteCache) CheckBlob(compressedSha string) (bool, error) {
 
 	img, err := remote.Image(ref, c.options...)
 	if err != nil {
-		var transportErr *transport.Error
-		if errors.As(err, &transportErr) && transportErr.StatusCode == http.StatusNotFound {
-			return false, nil // Blob not found in remote cache
+		if isRemoteCacheMiss(err) {
+			return false, nil //Blob was not found in the remote cache
 		}
 		return false, fmt.Errorf("Failed to fetch blob from remote cache: %w", err)
 	}
@@ -137,6 +141,11 @@ func (c *remoteCache) createBlobImage(compressedSha string, r io.Reader) (v1.Ima
 	return img, cleanup, nil
 }
 
+func isRemoteCacheMiss(err error) bool {
+	var transportErr *transport.Error
+	return errors.As(err, &transportErr) && transportErr.StatusCode == http.StatusNotFound
+}
+
 func validateLayerDigest(layer v1.Layer, expectedDigest string) error {
 	layerDigest, err := layer.Digest()
 	if err != nil {
@@ -159,6 +168,9 @@ func (c *remoteCache) PullBlob(compressedSha string) (io.ReadCloser, error) {
 
 	img, err := remote.Image(ref, c.options...)
 	if err != nil {
+		if isRemoteCacheMiss(err) {
+			return nil, fmt.Errorf("Blob %s not found in remote cache: %w", compressedSha, ErrRemoteCacheMiss)
+		}
 		return nil, fmt.Errorf("Failed to fetch blob from remote cache: %w", err)
 	}
 
@@ -178,6 +190,78 @@ func (c *remoteCache) PullBlob(compressedSha string) (io.ReadCloser, error) {
 	}
 
 	return reader, nil
+}
+
+func (c *remoteCache) PushKey(keyDigest string, reader io.Reader) error {
+	img, err := createKeyImage(reader)
+	if err != nil {
+		return err
+	}
+
+	ref, err := c.keyReference(keyDigest)
+	if err != nil {
+		return err
+	}
+
+	err = remote.Write(ref, img, c.options...)
+	if err != nil {
+		return fmt.Errorf("Failed to push key image to remote cache: %w", err)
+	}
+
+	return nil
+}
+
+func (c *remoteCache) PullKey(keyDigest string) (io.ReadCloser, error) {
+	ref, err := c.keyReference(keyDigest)
+	if err != nil {
+		return nil, err
+	}
+
+	img, err := remote.Image(ref, c.options...)
+	if err != nil {
+		if isRemoteCacheMiss(err) {
+			return nil, fmt.Errorf("Key %s not found in remote cache: %w", keyDigest, ErrRemoteCacheMiss)
+		}
+		return nil, fmt.Errorf("Failed to fetch key from remote cache: %w", err)
+	}
+
+	err = c.validateKeyImage(img)
+	if err != nil {
+		return nil, fmt.Errorf("Invalid key image in remote cache: %w", err)
+	}
+
+	layers, err := img.Layers()
+	if err != nil {
+		return nil, fmt.Errorf("Failed to get key layers: %w", err)
+	}
+
+	reader, err := layers[0].Compressed()
+	if err != nil {
+		return nil, fmt.Errorf("Failed to open compressed key layer from cache: %w", err)
+	}
+
+	return reader, nil
+}
+
+func createKeyImage(reader io.Reader) (v1.Image, error) {
+	//ReadAll is sufficient since the expected metadata is only a JSON file
+	data, err := io.ReadAll(reader)
+	if err != nil {
+		return nil, fmt.Errorf("Failed to read key data: %w", err)
+	}
+
+	layer := static.NewLayer(data, types.OCILayer)
+
+	img, err := mutate.AppendLayers(empty.Image, layer)
+	if err != nil {
+		return nil, fmt.Errorf("Failed to create key image with OCI layer: %w", err)
+	}
+
+	return img, nil
+}
+
+func keyTag(keyDigest string) string {
+	return "key-sha256-" + normalizeHexDigest(keyDigest)
 }
 
 // Helper to normalize the tag for the blob
@@ -212,6 +296,25 @@ func (c *remoteCache) blobReference(compressedSha string) (name.Reference, error
 	return ref, nil
 }
 
+func (c *remoteCache) keyReference(keyDigest string) (name.Reference, error) {
+	registryURL := strings.TrimSuffix(c.registryURL, "/")
+	repository := strings.TrimPrefix(c.repository, "/")
+
+	target := fmt.Sprintf("%s/%s:%s", registryURL, repository, keyTag(keyDigest))
+
+	var opts []name.Option
+	if c.insecure {
+		opts = append(opts, name.Insecure)
+	}
+
+	ref, err := name.ParseReference(target, opts...)
+	if err != nil {
+		return nil, fmt.Errorf("Failed to parse remote key reference: %q: %w", target, err)
+	}
+
+	return ref, nil
+}
+
 // Function to check if the image is refers to the correct blob that we are looking for in case of tag manipulation.
 func (c *remoteCache) validateBlobImage(img v1.Image, expectedCompressedSha string) error {
 	layers, err := img.Layers()
@@ -236,6 +339,19 @@ func (c *remoteCache) validateBlobImage(img v1.Image, expectedCompressedSha stri
 
 	if !strings.EqualFold(layerDigest.Hex, expectedHex) {
 		return fmt.Errorf("Blob layer digest mismatch: expected %s, got %s", expectedHex, layerDigest.Hex)
+	}
+
+	return nil
+}
+
+func (c *remoteCache) validateKeyImage(img v1.Image) error {
+	layers, err := img.Layers()
+	if err != nil {
+		return fmt.Errorf("Failed to get key layers: %w", err)
+	}
+
+	if len(layers) != 1 {
+		return fmt.Errorf("Expected exactly one layer in the key image, but found %d", len(layers))
 	}
 
 	return nil

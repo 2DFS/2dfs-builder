@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"slices"
 
 	"github.com/2DFS/2dfs-builder/filesystem"
 )
@@ -83,6 +84,31 @@ func validateRemoteCacheKeyIdentity(fileSha string, dst []string) error {
 		if d == "" {
 			return fmt.Errorf("remote cache key contains empty dst entry")
 		}
+	}
+
+	return nil
+}
+
+func validateRemoteCacheKeyMatch(key filesystem.RemoteCacheKey, expectedFileSha string, expectedDst []string, expectedKeyDigest string) error {
+	if err := validateRemoteCacheKey(key); err != nil {
+		return fmt.Errorf("pulled remote cache key is invalid: %w", err)
+	}
+
+	if key.FileSha != expectedFileSha {
+		return fmt.Errorf("remote cache key fileSha mismatch: expected %q, got %q", expectedFileSha, key.FileSha)
+	}
+
+	if !slices.Equal(key.Dst, expectedDst) {
+		return fmt.Errorf("remote cache key dst mismatch: expected %v, got %v", expectedDst, key.Dst)
+	}
+
+	actualKeyDigest, err := remoteKeyDigest(key.FileSha, key.Dst)
+	if err != nil {
+		return fmt.Errorf("failed to calculate pulled remote cache key digest: %w", err)
+	}
+
+	if actualKeyDigest != expectedKeyDigest {
+		return fmt.Errorf("remote cache key digest mismatch: expected %q, got %q", expectedKeyDigest, actualKeyDigest)
 	}
 
 	return nil

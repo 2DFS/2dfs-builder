@@ -164,3 +164,113 @@ func TestEncodeRemoteCacheKeyRejectsInvalidMetadata(t *testing.T) {
 		t.Fatalf("expected validation error")
 	}
 }
+
+func TestValidateRemoteCacheKeyMatchAcceptsMatchingIdentity(t *testing.T) {
+	fileSha := "file-sha-test"
+	dst := []string{"./Dockerfile", "./requirements.txt"}
+
+	expectedKeyDigest, err := remoteKeyDigest(fileSha, dst)
+	if err != nil {
+		t.Fatalf("remoteKeyDigest returned error: %v", err)
+	}
+
+	key := newRemoteCacheKey(
+		fileSha,
+		dst,
+		"compressed-sha-test",
+		"diff-id-test",
+	)
+
+	if err := validateRemoteCacheKeyMatch(
+		key,
+		fileSha,
+		dst,
+		expectedKeyDigest,
+	); err != nil {
+		t.Fatalf("validateRemoteCacheKeyMatch returned error: %v", err)
+	}
+}
+
+func TestValidateRemoteCacheKeyMatchRejectsMismatches(t *testing.T) {
+	fileSha := "file-sha-test"
+	dst := []string{"./Dockerfile"}
+
+	expectedKeyDigest, err := remoteKeyDigest(fileSha, dst)
+	if err != nil {
+		t.Fatalf("remoteKeyDigest returned error: %v", err)
+	}
+
+	tests := []struct {
+		name              string
+		key               filesystem.RemoteCacheKey
+		expectedKeyDigest string
+		errorContains     string
+	}{
+		{
+			name: "fileSha mismatch",
+			key: newRemoteCacheKey(
+				"different-file-sha",
+				dst,
+				"compressed-sha-test",
+				"diff-id-test",
+			),
+			expectedKeyDigest: expectedKeyDigest,
+			errorContains:     "fileSha mismatch",
+		},
+		{
+			name: "dst mismatch",
+			key: newRemoteCacheKey(
+				fileSha,
+				[]string{"./requirements.txt"},
+				"compressed-sha-test",
+				"diff-id-test",
+			),
+			expectedKeyDigest: expectedKeyDigest,
+			errorContains:     "dst mismatch",
+		},
+		{
+			name: "key digest mismatch",
+			key: newRemoteCacheKey(
+				fileSha,
+				dst,
+				"compressed-sha-test",
+				"diff-id-test",
+			),
+			expectedKeyDigest: strings.Repeat("0", 64),
+			errorContains:     "digest mismatch",
+		},
+		{
+			name: "invalid metadata",
+			key: newRemoteCacheKey(
+				fileSha,
+				dst,
+				"",
+				"diff-id-test",
+			),
+			expectedKeyDigest: expectedKeyDigest,
+			errorContains:     "pulled remote cache key is invalid",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := validateRemoteCacheKeyMatch(
+				tt.key,
+				fileSha,
+				dst,
+				tt.expectedKeyDigest,
+			)
+			if err == nil {
+				t.Fatalf("expected error")
+			}
+
+			if !strings.Contains(err.Error(), tt.errorContains) {
+				t.Fatalf(
+					"expected error containing %q, got %q",
+					tt.errorContains,
+					err,
+				)
+			}
+		})
+	}
+}

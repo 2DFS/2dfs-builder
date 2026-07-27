@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -12,7 +13,6 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"errors"
 
 	"log"
 
@@ -1016,6 +1016,13 @@ func (c *containerImage) pushRemoteBlobIfNeeded(compressedSha string) error {
 	return nil
 }
 
+func normalizeCompressedSHA256(compressedSha string) string {
+	normalized := strings.TrimSpace(compressedSha)
+	normalized = strings.TrimPrefix(normalized, "sha256:")
+	normalized = strings.TrimPrefix(normalized, "sha256-")
+	return strings.ToLower(normalized)
+}
+
 func (c *containerImage) pullRemoteBlobToLocalCache(compressedSha string) (bool, error) {
 	if c.blobCache.Check(compressedSha) {
 		return true, nil
@@ -1056,8 +1063,13 @@ func (c *containerImage) pullRemoteBlobToLocalCache(compressedSha string) (bool,
 		}
 	}()
 
+	digestHash := sha256.New()
 	copyBuffer := make([]byte, 1024*1024)
-	_, err = io.CopyBuffer(blobWriter, reader, copyBuffer)
+
+	_, err = io.CopyBuffer(io.MultiWriter(blobWriter, digestHash), reader, copyBuffer)
+
+	calculatedCompressedSha := fmt.Sprintf("%x", digestHash.Sum(nil))
+	expectedCompressedSha := normalizeCompressedSHA256(compressedSha)
 
 	closeErr := blobWriter.Close()
 	writerClosed = true
@@ -1072,6 +1084,11 @@ func (c *containerImage) pullRemoteBlobToLocalCache(compressedSha string) (bool,
 		c.blobCache.Del(compressedSha)
 		log.Printf("Blob %s remote cache restore [FAILED]: %v\n", compressedSha, closeErr)
 		return false, fmt.Errorf("Failed to close local blob cache entry after remote restore: %s: %w", compressedSha, closeErr)
+	}
+
+	if !strings.EqualFold(calculatedCompressedSha, expectedCompressedSha) {
+		c.blobCache.Del(compressedSha)
+		return false, fmt.Errorf("Pulled blob digest mismatch: expected sha256:%s, got sha256:%s", expectedCompressedSha, calculatedCompressedSha)
 	}
 
 	if !c.blobCache.Check(compressedSha) {

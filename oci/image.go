@@ -1023,6 +1023,50 @@ func normalizeCompressedSHA256(compressedSha string) string {
 	return strings.ToLower(normalized)
 }
 
+func (c *containerImage) pullRemoteCacheKey(fileSha string, dst []string) (filesystem.RemoteCacheKey, bool, error) {
+	var emptyKey filesystem.RemoteCacheKey
+
+	if c.remoteCache == nil {
+		return emptyKey, false, nil
+	}
+
+	keyDigest, err := remoteKeyDigest(fileSha, dst)
+	if err != nil {
+		return emptyKey, false, fmt.Errorf("failed to calculate remote cache key digest: %w", err)
+	}
+
+	reader, err := c.remoteCache.PullKey(keyDigest)
+	if err != nil {
+		if reader != nil {
+			_ = reader.Close()
+		}
+
+		if errors.Is(err, cache.ErrRemoteCacheMiss) {
+			log.Printf("Remote key %s [MISS] in remote cache\n", keyDigest)
+			return emptyKey, false, nil
+		}
+
+		return emptyKey, false, fmt.Errorf("failed to pull remote cache key %s: %w", keyDigest, err)
+	}
+
+	if reader == nil {
+		return emptyKey, false, fmt.Errorf("remote cache returned a nil reader for key %s", keyDigest)
+	}
+	defer reader.Close()
+
+	key, err := decodeRemoteCacheKey(reader)
+	if err != nil {
+		return emptyKey, false, fmt.Errorf("failed to decode remote cache key %s: %w", keyDigest, err)
+	}
+
+	if err := validateRemoteCacheKeyMatch(key, fileSha, dst, keyDigest); err != nil {
+		return emptyKey, false, fmt.Errorf("remote cache key %s failed semantic validation: %w", keyDigest, err)
+	}
+
+	log.Printf("Remote key %s [HIT] in remote cache\n", keyDigest)
+	return key, true, nil
+}
+
 func (c *containerImage) pullRemoteBlobToLocalCache(compressedSha string) (bool, error) {
 	if c.blobCache.Check(compressedSha) {
 		return true, nil

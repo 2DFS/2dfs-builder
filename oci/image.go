@@ -1120,8 +1120,8 @@ func (c *containerImage) pullRemoteBlobToLocalCache(compressedSha string) (bool,
 
 	if err != nil {
 		c.blobCache.Del(compressedSha)
-		log.Printf("Blob %s remote cache restore [FAILED]: %v\n", compressedSha, err)
-		return false, nil
+
+		return false, fmt.Errorf("Failed to restore blob %s from remote cache: %w", compressedSha, err)
 	}
 
 	if closeErr != nil {

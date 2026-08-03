@@ -3,6 +3,7 @@ package oci
 import (
 	"bytes"
 	"crypto/sha256"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -14,8 +15,9 @@ import (
 )
 
 type fakeRemoteCache struct {
-	blob []byte
-	err  error
+	blob   []byte
+	reader io.ReadCloser
+	err    error
 }
 
 func (f fakeRemoteCache) CheckBlob(compressedSha string) (bool, error) {
@@ -30,6 +32,11 @@ func (f fakeRemoteCache) PullBlob(compressedSha string) (io.ReadCloser, error) {
 	if f.err != nil {
 		return nil, f.err
 	}
+
+	if f.reader != nil {
+		return f.reader, nil
+	}
+
 	return io.NopCloser(bytes.NewReader(f.blob)), nil
 }
 
@@ -39,6 +46,18 @@ func (f fakeRemoteCache) PushKey(keyDigest string, reader io.Reader) error {
 
 func (f fakeRemoteCache) PullKey(keyDigest string) (io.ReadCloser, error) {
 	return nil, cache.ErrRemoteCacheMiss
+}
+
+type failingReadCloser struct {
+	err error
+}
+
+func (r *failingReadCloser) Read(p []byte) (int, error) {
+	return 0, r.err
+}
+
+func (r *failingReadCloser) Close() error {
+	return nil
 }
 
 func testSHA256Hex(data []byte) string {
@@ -115,5 +134,49 @@ func TestPullRemoteBlobToLocalCacheRejectsDigestMismatch(t *testing.T) {
 
 	if _, statErr := os.Stat(filepath.Join(blobCacheDir, compressedSha)); !os.IsNotExist(statErr) {
 		t.Fatalf("expected mismatched local blob to be deleted")
+	}
+}
+
+func TestPullRemoteBlobToLocalCacheReturnsStreamError(t *testing.T) {
+	remoteReadErr := errors.New("remote stream interrupted")
+	compressedSha := testSHA256Hex([]byte("expected blob content"))
+
+	blobCacheDir := t.TempDir()
+	blobCache, err := cache.NewCacheStore(blobCacheDir)
+	if err != nil {
+		t.Fatalf("NewCacheStore returned error: %v", err)
+	}
+
+	container := &containerImage{
+		blobCache: blobCache,
+		remoteCache: fakeRemoteCache{
+			reader: &failingReadCloser{
+				err: remoteReadErr,
+			},
+		},
+	}
+
+	available, err := container.pullRemoteBlobToLocalCache(
+		compressedSha,
+	)
+
+	if err == nil {
+		t.Fatal("expected remote stream error")
+	}
+
+	if available {
+		t.Fatal("expected blob to remain unavailable")
+	}
+
+	if !errors.Is(err, remoteReadErr) {
+		t.Fatalf(
+			"expected wrapped remote stream error, got: %v",
+			err,
+		)
+	}
+
+	blobPath := filepath.Join(blobCacheDir, compressedSha)
+	if _, statErr := os.Stat(blobPath); !os.IsNotExist(statErr) {
+		t.Fatal("expected incomplete local blob entry to be deleted")
 	}
 }

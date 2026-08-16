@@ -1224,6 +1224,30 @@ func (c *containerImage) filterByPlatform(index v1.Index) v1.Index {
 	return index
 }
 
+func upsertFileCacheKey(cacheKeys CacheKeys, cacheFile FileCacheKey) CacheKeys {
+	updatedKeys := make([]FileCacheKey, 0, len(cacheKeys.Keys)+1)
+	replaced := false
+
+	for _, existingKey := range cacheKeys.Keys {
+		if existingKey.Destination != cacheFile.Destination {
+			updatedKeys = append(updatedKeys, existingKey)
+			continue
+		}
+
+		if !replaced {
+			updatedKeys = append(updatedKeys, cacheFile)
+			replaced = true
+		}
+	}
+
+	if !replaced {
+		updatedKeys = append(updatedKeys, cacheFile)
+	}
+
+	cacheKeys.Keys = updatedKeys
+	return cacheKeys
+}
+
 func (c *containerImage) upsertCacheKey(fileSha string, cacheFile FileCacheKey, dst []string) error {
 	//convert destination to string
 	destinationStr := strings.Join(dst[:], ",")
@@ -1233,6 +1257,7 @@ func (c *containerImage) upsertCacheKey(fileSha string, cacheFile FileCacheKey, 
 	cachekey := CacheKeys{
 		Keys: []FileCacheKey{},
 	}
+
 	// if cache entry found, read it so we can append the new key
 	if err == nil {
 		cachekey, err = ParseCacheKey(keyDigestReader)
@@ -1244,7 +1269,7 @@ func (c *containerImage) upsertCacheKey(fileSha string, cacheFile FileCacheKey, 
 		c.keyDigestCache.Del(fileSha)
 	}
 
-	cachekey.Keys = append(cachekey.Keys, cacheFile)
+	cachekey = upsertFileCacheKey(cachekey, cacheFile)
 	cachewriter, err := c.keyDigestCache.Add(fileSha)
 	if err != nil {
 		return err

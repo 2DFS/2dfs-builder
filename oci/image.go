@@ -1023,6 +1023,32 @@ func normalizeCompressedSHA256(compressedSha string) string {
 	return strings.ToLower(normalized)
 }
 
+func (c *containerImage) pushRemoteCacheKey(fileSha string, dst []string, compressedSha string, diffID string) error {
+	if c.remoteCache == nil {
+		return nil
+	}
+
+	keyDigest, err := remoteKeyDigest(fileSha, dst)
+	if err != nil {
+		return fmt.Errorf("failed to calculate remote cache key digest: %w", err)
+	}
+
+	key := newRemoteCacheKey(fileSha, dst, compressedSha, diffID)
+
+	reader, err := encodeRemoteCacheKey(key)
+	if err != nil {
+		return fmt.Errorf("failed to encode remote cache key %s: %w", keyDigest, err)
+	}
+
+	if err := c.remoteCache.PushKey(keyDigest, reader); err != nil {
+		return fmt.Errorf("failed to push remote cache key %s: %w", keyDigest, err)
+	}
+
+	log.Printf("Remote key %s [PUSHED] to remote cache\n", keyDigest)
+
+	return nil
+}
+
 func (c *containerImage) pullRemoteCacheKey(fileSha string, dst []string) (filesystem.RemoteCacheKey, bool, error) {
 	var emptyKey filesystem.RemoteCacheKey
 

@@ -18,6 +18,11 @@ type fakeRemoteKeyCache struct {
 	pullKeyErr         error
 	returnNilReader    bool
 	requestedKeyDigest string
+
+	pushKeyErr      error
+	pushKeyCalls    int
+	pushedKeyDigest string
+	pushedKeyData   []byte
 }
 
 func (f *fakeRemoteKeyCache) CheckBlob(compressedSha string) (bool, error) {
@@ -33,6 +38,20 @@ func (f *fakeRemoteKeyCache) PullBlob(compressedSha string) (io.ReadCloser, erro
 }
 
 func (f *fakeRemoteKeyCache) PushKey(keyDigest string, reader io.Reader) error {
+	f.pushKeyCalls++
+	f.pushedKeyDigest = keyDigest
+
+	if f.pushKeyErr != nil {
+		return f.pushKeyErr
+	}
+
+	data, err := io.ReadAll(reader)
+	if err != nil {
+		return err
+	}
+
+	f.pushedKeyData = append([]byte(nil), data...)
+
 	return nil
 }
 
@@ -270,5 +289,125 @@ func TestPullRemoteCacheKeyRejectsNilReader(t *testing.T) {
 
 	if !strings.Contains(err.Error(), "nil reader") {
 		t.Fatalf("expected nil reader error, got: %v", err)
+	}
+}
+
+func TestPushRemoteCacheKeyPublishesExpectedMetadata(t *testing.T) {
+	fileSha := "file-sha-test"
+	dst := []string{"./Dockerfile", "./requirements.txt"}
+	compressedSha := "compressed-sha-test"
+	diffID := "diff-id-test"
+
+	remoteCache := &fakeRemoteKeyCache{}
+
+	container := &containerImage{
+		remoteCache: remoteCache,
+	}
+
+	err := container.pushRemoteCacheKey(
+		fileSha,
+		dst,
+		compressedSha,
+		diffID,
+	)
+	if err != nil {
+		t.Fatalf("pushRemoteCacheKey returned error: %v", err)
+	}
+
+	if remoteCache.pushKeyCalls != 1 {
+		t.Fatalf(
+			"expected PushKey to be called once, got %d",
+			remoteCache.pushKeyCalls,
+		)
+	}
+
+	expectedDigest, err := remoteKeyDigest(fileSha, dst)
+	if err != nil {
+		t.Fatalf("remoteKeyDigest returned error: %v", err)
+	}
+
+	if remoteCache.pushedKeyDigest != expectedDigest {
+		t.Fatalf(
+			"unexpected pushed key digest: expected %q, got %q",
+			expectedDigest,
+			remoteCache.pushedKeyDigest,
+		)
+	}
+
+	actualKey, err := decodeRemoteCacheKey(
+		bytes.NewReader(remoteCache.pushedKeyData),
+	)
+	if err != nil {
+		t.Fatalf("failed to decode pushed remote key: %v", err)
+	}
+
+	expectedKey := newRemoteCacheKey(
+		fileSha,
+		dst,
+		compressedSha,
+		diffID,
+	)
+
+	if !reflect.DeepEqual(actualKey, expectedKey) {
+		t.Fatalf(
+			"unexpected pushed remote key\nexpected: %#v\nactual:   %#v",
+			expectedKey,
+			actualKey,
+		)
+	}
+}
+
+func TestPushRemoteCacheKeyReturnsPushError(t *testing.T) {
+	pushErr := errors.New("remote key push failed")
+
+	remoteCache := &fakeRemoteKeyCache{
+		pushKeyErr: pushErr,
+	}
+
+	container := &containerImage{
+		remoteCache: remoteCache,
+	}
+
+	err := container.pushRemoteCacheKey(
+		"file-sha-test",
+		[]string{"./Dockerfile"},
+		"compressed-sha-test",
+		"diff-id-test",
+	)
+
+	if err == nil {
+		t.Fatalf("expected pushRemoteCacheKey to return an error")
+	}
+
+	if !errors.Is(err, pushErr) {
+		t.Fatalf(
+			"expected wrapped PushKey error, got: %v",
+			err,
+		)
+	}
+
+	if remoteCache.pushKeyCalls != 1 {
+		t.Fatalf(
+			"expected PushKey to be called once, got %d",
+			remoteCache.pushKeyCalls,
+		)
+	}
+}
+
+func TestPushRemoteCacheKeyWithoutRemoteCacheDoesNothing(t *testing.T) {
+	container := &containerImage{}
+
+	err := container.pushRemoteCacheKey(
+		"file-sha-test",
+		[]string{"./Dockerfile"},
+		"compressed-sha-test",
+		"diff-id-test",
+	)
+
+	if err != nil {
+		t.Fatalf(
+			"expected no error without remote cache, got: %v",
+			err,
+		)
 	}
 }

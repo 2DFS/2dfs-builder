@@ -181,3 +181,64 @@ func TestUpsertCacheKeyAppendsNewDestination(
 		)
 	}
 }
+
+func TestUpsertFileCacheKeyRemovesDuplicateDestinations(
+	t *testing.T,
+) {
+	cacheKeys := CacheKeys{
+		Keys: []FileCacheKey{
+			{
+				Destination:   "/app/config.json",
+				DiffID:        "old-diff-id-1",
+				CompressedSha: "old-compressed-sha-1",
+			},
+			{
+				Destination:   "/app/other.json",
+				DiffID:        "other-diff-id",
+				CompressedSha: "other-compressed-sha",
+			},
+			{
+				Destination:   "/app/config.json",
+				DiffID:        "old-diff-id-2",
+				CompressedSha: "old-compressed-sha-2",
+			},
+		},
+	}
+
+	newKey := FileCacheKey{
+		Destination:   "/app/config.json",
+		DiffID:        "new-diff-id",
+		CompressedSha: "new-compressed-sha",
+	}
+
+	updated := upsertFileCacheKey(cacheKeys, newKey)
+
+	if len(updated.Keys) != 2 {
+		t.Fatalf(
+			"expected two unique destinations, got %d",
+			len(updated.Keys),
+		)
+	}
+
+	if updated.Keys[0] != newKey {
+		t.Fatalf(
+			"unexpected replaced key\nexpected: %#v\nactual:   %#v",
+			newKey,
+			updated.Keys[0],
+		)
+	}
+
+	expectedOther := FileCacheKey{
+		Destination:   "/app/other.json",
+		DiffID:        "other-diff-id",
+		CompressedSha: "other-compressed-sha",
+	}
+
+	if updated.Keys[1] != expectedOther {
+		t.Fatalf(
+			"unrelated key was modified\nexpected: %#v\nactual:   %#v",
+			expectedOther,
+			updated.Keys[1],
+		)
+	}
+}

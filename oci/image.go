@@ -897,17 +897,44 @@ func (c *containerImage) buildAllotment(a filesystem.AllotmentManifest, f filesy
 		return "", ""
 	}()
 
-	// Check if remote cache has the blob
-	if compressedSha != "" {
-		available, err := c.pullRemoteBlobToLocalCache(compressedSha)
+	// Check if the local blob is usable and/or existent in the local cache where local key is pointing
+	if compressedSha != "" && !c.blobCache.Check(compressedSha) {
+		log.Printf("Blob %s referenced by local key is [MISSING] in local cache, trying remote cache\n", compressedSha)
+
+		compressedSha = ""
+		diffID = ""
+	}
+
+	// If no usable local cache entry exists, check the remote key cache to confirm if the blob is present in the remote cache
+	if compressedSha == "" {
+		remoteKey, found, err := c.pullRemoteCacheKey(fileSha, a.Dst.List)
 		if err != nil {
 			return err
 		}
 
-		if !available {
-			log.Printf("Blob %s was [NOT FOUND] in local or remote cache, rebuilding allotment\n", compressedSha)
-			compressedSha = ""
-			diffID = ""
+		if found {
+			available, err := c.pullRemoteBlobToLocalCache(remoteKey.CompressedSha)
+			if err != nil {
+				return err
+			}
+
+			if available {
+				compressedSha = remoteKey.CompressedSha
+				diffID = remoteKey.DiffID
+
+				err = func() error {
+					c.cacheLock.Lock()
+					defer c.cacheLock.Unlock()
+
+					return c.upsertCacheKey(fileSha, FileCacheKey{DiffID: diffID, CompressedSha: compressedSha}, a.Dst.List)
+				}()
+
+				if err != nil {
+					return err
+				}
+
+				log.Printf("File %s [RESTORED] from remote cache\n", a.Src)
+			}
 		}
 	}
 
@@ -971,6 +998,12 @@ func (c *containerImage) buildAllotment(a filesystem.AllotmentManifest, f filesy
 
 	// push blob to remote cache if needed
 	err = c.pushRemoteBlobIfNeeded(compressedSha)
+	if err != nil {
+		return err
+	}
+
+	// publish the remote key only after the referenced blob is available remotely
+	err = c.pushRemoteCacheKey(fileSha, a.Dst.List, compressedSha, diffID)
 	if err != nil {
 		return err
 	}

@@ -89,10 +89,10 @@ func TestRemoteKeyDigestRejectsInvalidIdentity(t *testing.T) {
 	}
 }
 
-func TestNewRemoteCacheKeyCopiesDst(t *testing.T) {
+func TestNewRemoteKeyCopiesDst(t *testing.T) {
 	dst := []string{"./Dockerfile"}
 
-	key := newRemoteCacheKey(
+	key := newRemoteKey(
 		"file-sha-test",
 		dst,
 		"compressed-sha-test",
@@ -102,21 +102,21 @@ func TestNewRemoteCacheKeyCopiesDst(t *testing.T) {
 	dst[0] = "./changed"
 
 	if key.Dst[0] != "./Dockerfile" {
-		t.Fatalf("expected newRemoteCacheKey to copy dst slice, got %v", key.Dst)
+		t.Fatalf("expected newRemoteKey to copy dst slice, got %v", key.Dst)
 	}
 }
 
-func TestEncodeDecodeRemoteCacheKeyRoundTrip(t *testing.T) {
-	original := filesystem.RemoteCacheKey{
+func TestEncodeDecodeRemoteKeyRoundTrip(t *testing.T) {
+	original := filesystem.RemoteKey{
 		FileSha:       "file-sha-test",
 		Dst:           []string{"./Dockerfile", "./requirements.txt"},
 		CompressedSha: "compressed-sha-test",
 		DiffID:        "diff-id-test",
 	}
 
-	reader, err := encodeRemoteCacheKey(original)
+	reader, err := encodeRemoteKey(original)
 	if err != nil {
-		t.Fatalf("encodeRemoteCacheKey returned error: %v", err)
+		t.Fatalf("encodeRemoteKey returned error: %v", err)
 	}
 
 	data, err := io.ReadAll(reader)
@@ -128,9 +128,9 @@ func TestEncodeDecodeRemoteCacheKeyRoundTrip(t *testing.T) {
 		t.Fatalf("expected valid JSON, got %q", string(data))
 	}
 
-	decoded, err := decodeRemoteCacheKey(strings.NewReader(string(data)))
+	decoded, err := decodeRemoteKey(strings.NewReader(string(data)))
 	if err != nil {
-		t.Fatalf("decodeRemoteCacheKey returned error: %v", err)
+		t.Fatalf("decodeRemoteKey returned error: %v", err)
 	}
 
 	if !reflect.DeepEqual(original, decoded) {
@@ -138,34 +138,34 @@ func TestEncodeDecodeRemoteCacheKeyRoundTrip(t *testing.T) {
 	}
 }
 
-func TestDecodeRemoteCacheKeyRejectsInvalidJSON(t *testing.T) {
-	if _, err := decodeRemoteCacheKey(strings.NewReader("{invalid-json")); err == nil {
+func TestDecodeRemoteKeyRejectsInvalidJSON(t *testing.T) {
+	if _, err := decodeRemoteKey(strings.NewReader("{invalid-json")); err == nil {
 		t.Fatalf("expected error")
 	}
 }
 
-func TestDecodeRemoteCacheKeyRejectsMissingFields(t *testing.T) {
+func TestDecodeRemoteKeyRejectsMissingFields(t *testing.T) {
 	payload := `{"fileSha":"file-sha-test","dst":["./Dockerfile"]}`
 
-	if _, err := decodeRemoteCacheKey(strings.NewReader(payload)); err == nil {
+	if _, err := decodeRemoteKey(strings.NewReader(payload)); err == nil {
 		t.Fatalf("expected validation error")
 	}
 }
 
-func TestEncodeRemoteCacheKeyRejectsInvalidMetadata(t *testing.T) {
-	key := filesystem.RemoteCacheKey{
+func TestEncodeRemoteKeyRejectsInvalidMetadata(t *testing.T) {
+	key := filesystem.RemoteKey{
 		FileSha:       "file-sha-test",
 		Dst:           []string{"./Dockerfile"},
 		CompressedSha: "",
 		DiffID:        "diff-id-test",
 	}
 
-	if _, err := encodeRemoteCacheKey(key); err == nil {
+	if _, err := encodeRemoteKey(key); err == nil {
 		t.Fatalf("expected validation error")
 	}
 }
 
-func TestValidateRemoteCacheKeyMatchAcceptsMatchingIdentity(t *testing.T) {
+func TestValidateRemoteKeyMatchAcceptsMatchingIdentity(t *testing.T) {
 	fileSha := "file-sha-test"
 	dst := []string{"./Dockerfile", "./requirements.txt"}
 
@@ -174,24 +174,24 @@ func TestValidateRemoteCacheKeyMatchAcceptsMatchingIdentity(t *testing.T) {
 		t.Fatalf("remoteKeyDigest returned error: %v", err)
 	}
 
-	key := newRemoteCacheKey(
+	key := newRemoteKey(
 		fileSha,
 		dst,
 		"compressed-sha-test",
 		"diff-id-test",
 	)
 
-	if err := validateRemoteCacheKeyMatch(
+	if err := validateRemoteKeyMatch(
 		key,
 		fileSha,
 		dst,
 		expectedKeyDigest,
 	); err != nil {
-		t.Fatalf("validateRemoteCacheKeyMatch returned error: %v", err)
+		t.Fatalf("validateRemoteKeyMatch returned error: %v", err)
 	}
 }
 
-func TestValidateRemoteCacheKeyMatchRejectsMismatches(t *testing.T) {
+func TestValidateRemoteKeyMatchRejectsMismatches(t *testing.T) {
 	fileSha := "file-sha-test"
 	dst := []string{"./Dockerfile"}
 
@@ -202,13 +202,13 @@ func TestValidateRemoteCacheKeyMatchRejectsMismatches(t *testing.T) {
 
 	tests := []struct {
 		name              string
-		key               filesystem.RemoteCacheKey
+		key               filesystem.RemoteKey
 		expectedKeyDigest string
 		errorContains     string
 	}{
 		{
 			name: "fileSha mismatch",
-			key: newRemoteCacheKey(
+			key: newRemoteKey(
 				"different-file-sha",
 				dst,
 				"compressed-sha-test",
@@ -219,7 +219,7 @@ func TestValidateRemoteCacheKeyMatchRejectsMismatches(t *testing.T) {
 		},
 		{
 			name: "dst mismatch",
-			key: newRemoteCacheKey(
+			key: newRemoteKey(
 				fileSha,
 				[]string{"./requirements.txt"},
 				"compressed-sha-test",
@@ -230,7 +230,7 @@ func TestValidateRemoteCacheKeyMatchRejectsMismatches(t *testing.T) {
 		},
 		{
 			name: "key digest mismatch",
-			key: newRemoteCacheKey(
+			key: newRemoteKey(
 				fileSha,
 				dst,
 				"compressed-sha-test",
@@ -241,7 +241,7 @@ func TestValidateRemoteCacheKeyMatchRejectsMismatches(t *testing.T) {
 		},
 		{
 			name: "invalid metadata",
-			key: newRemoteCacheKey(
+			key: newRemoteKey(
 				fileSha,
 				dst,
 				"",
@@ -254,7 +254,7 @@ func TestValidateRemoteCacheKeyMatchRejectsMismatches(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			err := validateRemoteCacheKeyMatch(
+			err := validateRemoteKeyMatch(
 				tt.key,
 				fileSha,
 				dst,

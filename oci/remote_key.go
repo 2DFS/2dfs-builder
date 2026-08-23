@@ -13,7 +13,7 @@ import (
 )
 
 func remoteKeyDigest(fileSha string, dst []string) (string, error) {
-	if err := validateRemoteCacheKeyIdentity(fileSha, dst); err != nil {
+	if err := validateRemoteKeyIdentity(fileSha, dst); err != nil {
 		return "", err
 	}
 
@@ -34,8 +34,8 @@ func remoteKeyDigest(fileSha string, dst []string) (string, error) {
 	return hex.EncodeToString(hash[:]), nil
 }
 
-func newRemoteCacheKey(fileSha string, dst []string, compressedSha string, diffID string) filesystem.RemoteCacheKey {
-	return filesystem.RemoteCacheKey{
+func newRemoteKey(fileSha string, dst []string, compressedSha string, diffID string) filesystem.RemoteKey {
+	return filesystem.RemoteKey{
 		FileSha:       fileSha,
 		Dst:           append([]string(nil), dst...),
 		CompressedSha: compressedSha,
@@ -43,8 +43,8 @@ func newRemoteCacheKey(fileSha string, dst []string, compressedSha string, diffI
 	}
 }
 
-func encodeRemoteCacheKey(key filesystem.RemoteCacheKey) (io.Reader, error) {
-	if err := validateRemoteCacheKey(key); err != nil {
+func encodeRemoteKey(key filesystem.RemoteKey) (io.Reader, error) {
+	if err := validateRemoteKey(key); err != nil {
 		return nil, err
 	}
 
@@ -56,14 +56,14 @@ func encodeRemoteCacheKey(key filesystem.RemoteCacheKey) (io.Reader, error) {
 	return bytes.NewReader(data), nil
 }
 
-func decodeRemoteCacheKey(reader io.Reader) (filesystem.RemoteCacheKey, error) {
-	var key filesystem.RemoteCacheKey
+func decodeRemoteKey(reader io.Reader) (filesystem.RemoteKey, error) {
+	var key filesystem.RemoteKey
 
 	if err := json.NewDecoder(reader).Decode(&key); err != nil {
 		return key, fmt.Errorf("failed to decode remote cache key: %w", err)
 	}
 
-	if err := validateRemoteCacheKey(key); err != nil {
+	if err := validateRemoteKey(key); err != nil {
 		return key, err
 	}
 
@@ -71,7 +71,7 @@ func decodeRemoteCacheKey(reader io.Reader) (filesystem.RemoteCacheKey, error) {
 
 }
 
-func validateRemoteCacheKeyIdentity(fileSha string, dst []string) error {
+func validateRemoteKeyIdentity(fileSha string, dst []string) error {
 	if fileSha == "" {
 		return fmt.Errorf("remote cache key fileSha is empty")
 	}
@@ -89,8 +89,8 @@ func validateRemoteCacheKeyIdentity(fileSha string, dst []string) error {
 	return nil
 }
 
-func validateRemoteCacheKeyMatch(key filesystem.RemoteCacheKey, expectedFileSha string, expectedDst []string, expectedKeyDigest string) error {
-	if err := validateRemoteCacheKey(key); err != nil {
+func validateRemoteKeyMatch(key filesystem.RemoteKey, expectedFileSha string, expectedDst []string, expectedKeyDigest string) error {
+	if err := validateRemoteKey(key); err != nil {
 		return fmt.Errorf("pulled remote cache key is invalid: %w", err)
 	}
 
@@ -114,8 +114,8 @@ func validateRemoteCacheKeyMatch(key filesystem.RemoteCacheKey, expectedFileSha 
 	return nil
 }
 
-func validateRemoteCacheKey(key filesystem.RemoteCacheKey) error {
-	if err := validateRemoteCacheKeyIdentity(key.FileSha, key.Dst); err != nil {
+func validateRemoteKey(key filesystem.RemoteKey) error {
+	if err := validateRemoteKeyIdentity(key.FileSha, key.Dst); err != nil {
 		return err
 	}
 

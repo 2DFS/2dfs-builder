@@ -69,7 +69,7 @@ func (f *fakeRemoteKeyCache) PullKey(keyDigest string) (io.ReadCloser, error) {
 	return io.NopCloser(bytes.NewReader(f.keyPayload)), nil
 }
 
-func remoteKeyPayload(t *testing.T, key filesystem.RemoteCacheKey) []byte {
+func remoteKeyPayload(t *testing.T, key filesystem.RemoteKey) []byte {
 	t.Helper()
 
 	payload, err := json.Marshal(key)
@@ -80,11 +80,11 @@ func remoteKeyPayload(t *testing.T, key filesystem.RemoteCacheKey) []byte {
 	return payload
 }
 
-func TestPullRemoteCacheKeyReturnsValidatedHit(t *testing.T) {
+func TestLookupRemoteKeyReturnsValidatedHit(t *testing.T) {
 	fileSha := "file-sha-test"
 	dst := []string{"./Dockerfile", "./requirements.txt"}
 
-	expectedKey := newRemoteCacheKey(
+	expectedKey := newRemoteKey(
 		fileSha,
 		dst,
 		"compressed-sha-test",
@@ -99,9 +99,9 @@ func TestPullRemoteCacheKeyReturnsValidatedHit(t *testing.T) {
 		remoteCache: remoteCache,
 	}
 
-	key, found, err := container.pullRemoteCacheKey(fileSha, dst)
+	key, found, err := container.lookupRemoteKey(fileSha, dst)
 	if err != nil {
-		t.Fatalf("pullRemoteCacheKey returned error: %v", err)
+		t.Fatalf("lookupRemoteKey returned error: %v", err)
 	}
 
 	if !found {
@@ -130,7 +130,7 @@ func TestPullRemoteCacheKeyReturnsValidatedHit(t *testing.T) {
 	}
 }
 
-func TestPullRemoteCacheKeyReturnsMiss(t *testing.T) {
+func TestLookupRemoteKeyReturnsMiss(t *testing.T) {
 	remoteCache := &fakeRemoteKeyCache{
 		pullKeyErr: cache.ErrRemoteCacheMiss,
 	}
@@ -139,7 +139,7 @@ func TestPullRemoteCacheKeyReturnsMiss(t *testing.T) {
 		remoteCache: remoteCache,
 	}
 
-	key, found, err := container.pullRemoteCacheKey(
+	key, found, err := container.lookupRemoteKey(
 		"file-sha-test",
 		[]string{"./Dockerfile"},
 	)
@@ -151,12 +151,12 @@ func TestPullRemoteCacheKeyReturnsMiss(t *testing.T) {
 		t.Fatalf("expected remote cache miss")
 	}
 
-	if !reflect.DeepEqual(key, filesystem.RemoteCacheKey{}) {
+	if !reflect.DeepEqual(key, filesystem.RemoteKey{}) {
 		t.Fatalf("expected empty remote cache key, got: %#v", key)
 	}
 }
 
-func TestPullRemoteCacheKeyReturnsRegistryError(t *testing.T) {
+func TestLookupRemoteKeyReturnsRegistryError(t *testing.T) {
 	registryErr := errors.New("registry unavailable")
 
 	remoteCache := &fakeRemoteKeyCache{
@@ -167,7 +167,7 @@ func TestPullRemoteCacheKeyReturnsRegistryError(t *testing.T) {
 		remoteCache: remoteCache,
 	}
 
-	_, found, err := container.pullRemoteCacheKey(
+	_, found, err := container.lookupRemoteKey(
 		"file-sha-test",
 		[]string{"./Dockerfile"},
 	)
@@ -185,7 +185,7 @@ func TestPullRemoteCacheKeyReturnsRegistryError(t *testing.T) {
 	}
 }
 
-func TestPullRemoteCacheKeyRejectsInvalidJSON(t *testing.T) {
+func TestLookupRemoteKeyRejectsInvalidJSON(t *testing.T) {
 	remoteCache := &fakeRemoteKeyCache{
 		keyPayload: []byte("{invalid-json"),
 	}
@@ -194,7 +194,7 @@ func TestPullRemoteCacheKeyRejectsInvalidJSON(t *testing.T) {
 		remoteCache: remoteCache,
 	}
 
-	_, found, err := container.pullRemoteCacheKey(
+	_, found, err := container.lookupRemoteKey(
 		"file-sha-test",
 		[]string{"./Dockerfile"},
 	)
@@ -212,11 +212,11 @@ func TestPullRemoteCacheKeyRejectsInvalidJSON(t *testing.T) {
 	}
 }
 
-func TestPullRemoteCacheKeyRejectsIdentityMismatch(t *testing.T) {
+func TestLookupRemoteKeyRejectsIdentityMismatch(t *testing.T) {
 	expectedFileSha := "file-sha-test"
 	dst := []string{"./Dockerfile"}
 
-	wrongKey := newRemoteCacheKey(
+	wrongKey := newRemoteKey(
 		"different-file-sha",
 		dst,
 		"compressed-sha-test",
@@ -231,7 +231,7 @@ func TestPullRemoteCacheKeyRejectsIdentityMismatch(t *testing.T) {
 		remoteCache: remoteCache,
 	}
 
-	_, found, err := container.pullRemoteCacheKey(expectedFileSha, dst)
+	_, found, err := container.lookupRemoteKey(expectedFileSha, dst)
 	if err == nil {
 		t.Fatalf("expected semantic identity validation error")
 	}
@@ -245,10 +245,10 @@ func TestPullRemoteCacheKeyRejectsIdentityMismatch(t *testing.T) {
 	}
 }
 
-func TestPullRemoteCacheKeyWithoutRemoteCacheReturnsMiss(t *testing.T) {
+func TestLookupRemoteKeyWithoutRemoteCacheReturnsMiss(t *testing.T) {
 	container := &containerImage{}
 
-	key, found, err := container.pullRemoteCacheKey(
+	key, found, err := container.lookupRemoteKey(
 		"file-sha-test",
 		[]string{"./Dockerfile"},
 	)
@@ -260,12 +260,12 @@ func TestPullRemoteCacheKeyWithoutRemoteCacheReturnsMiss(t *testing.T) {
 		t.Fatalf("expected no cache hit without remote cache")
 	}
 
-	if !reflect.DeepEqual(key, filesystem.RemoteCacheKey{}) {
+	if !reflect.DeepEqual(key, filesystem.RemoteKey{}) {
 		t.Fatalf("expected empty remote cache key, got: %#v", key)
 	}
 }
 
-func TestPullRemoteCacheKeyRejectsNilReader(t *testing.T) {
+func TestLookupRemoteKeyRejectsNilReader(t *testing.T) {
 	remoteCache := &fakeRemoteKeyCache{
 		returnNilReader: true,
 	}
@@ -274,7 +274,7 @@ func TestPullRemoteCacheKeyRejectsNilReader(t *testing.T) {
 		remoteCache: remoteCache,
 	}
 
-	_, found, err := container.pullRemoteCacheKey(
+	_, found, err := container.lookupRemoteKey(
 		"file-sha-test",
 		[]string{"./Dockerfile"},
 	)
@@ -292,7 +292,7 @@ func TestPullRemoteCacheKeyRejectsNilReader(t *testing.T) {
 	}
 }
 
-func TestPushRemoteCacheKeyPublishesExpectedMetadata(t *testing.T) {
+func TestPublishRemoteKeyPublishesExpectedMetadata(t *testing.T) {
 	fileSha := "file-sha-test"
 	dst := []string{"./Dockerfile", "./requirements.txt"}
 	compressedSha := "compressed-sha-test"
@@ -304,14 +304,14 @@ func TestPushRemoteCacheKeyPublishesExpectedMetadata(t *testing.T) {
 		remoteCache: remoteCache,
 	}
 
-	err := container.pushRemoteCacheKey(
+	err := container.publishRemoteKey(
 		fileSha,
 		dst,
 		compressedSha,
 		diffID,
 	)
 	if err != nil {
-		t.Fatalf("pushRemoteCacheKey returned error: %v", err)
+		t.Fatalf("publishRemoteKey returned error: %v", err)
 	}
 
 	if remoteCache.pushKeyCalls != 1 {
@@ -334,14 +334,14 @@ func TestPushRemoteCacheKeyPublishesExpectedMetadata(t *testing.T) {
 		)
 	}
 
-	actualKey, err := decodeRemoteCacheKey(
+	actualKey, err := decodeRemoteKey(
 		bytes.NewReader(remoteCache.pushedKeyData),
 	)
 	if err != nil {
 		t.Fatalf("failed to decode pushed remote key: %v", err)
 	}
 
-	expectedKey := newRemoteCacheKey(
+	expectedKey := newRemoteKey(
 		fileSha,
 		dst,
 		compressedSha,
@@ -357,7 +357,7 @@ func TestPushRemoteCacheKeyPublishesExpectedMetadata(t *testing.T) {
 	}
 }
 
-func TestPushRemoteCacheKeyReturnsPushError(t *testing.T) {
+func TestPublishRemoteKeyReturnsPushError(t *testing.T) {
 	pushErr := errors.New("remote key push failed")
 
 	remoteCache := &fakeRemoteKeyCache{
@@ -368,7 +368,7 @@ func TestPushRemoteCacheKeyReturnsPushError(t *testing.T) {
 		remoteCache: remoteCache,
 	}
 
-	err := container.pushRemoteCacheKey(
+	err := container.publishRemoteKey(
 		"file-sha-test",
 		[]string{"./Dockerfile"},
 		"compressed-sha-test",
@@ -376,7 +376,7 @@ func TestPushRemoteCacheKeyReturnsPushError(t *testing.T) {
 	)
 
 	if err == nil {
-		t.Fatalf("expected pushRemoteCacheKey to return an error")
+		t.Fatalf("expected publishRemoteKey to return an error")
 	}
 
 	if !errors.Is(err, pushErr) {
@@ -394,10 +394,10 @@ func TestPushRemoteCacheKeyReturnsPushError(t *testing.T) {
 	}
 }
 
-func TestPushRemoteCacheKeyWithoutRemoteCacheDoesNothing(t *testing.T) {
+func TestPublishRemoteKeyWithoutRemoteCacheDoesNothing(t *testing.T) {
 	container := &containerImage{}
 
-	err := container.pushRemoteCacheKey(
+	err := container.publishRemoteKey(
 		"file-sha-test",
 		[]string{"./Dockerfile"},
 		"compressed-sha-test",

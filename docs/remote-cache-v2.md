@@ -110,7 +110,7 @@ The builder currently integrates remote blob handling into `buildAllotment`:
 4. A restored blob is streamed into the local cache while its SHA-256 digest is recomputed.
 5. The restored blob is accepted only when the computed digest matches the expected `compressedSha` and the local cache integrity check succeeds.
 6. If neither local nor remote blob is available, the allotment is rebuilt.
-7. Once a valid local blob exists, `pushRemoteBlobIfNeeded` publishes it to the remote cache when necessary.
+7. Once a valid local blob exists, `ensureRemoteBlob` publishes it to the remote cache when necessary.
 
 Remote blob restore treats OCI `404 Not Found` as a normal cache miss. Other registry, stream, local write, close, or integrity errors are propagated as build errors. Partial local blobs are deleted after failed restores.
 
@@ -190,7 +190,7 @@ key-sha256-<keyDigest>
 
 `remoteKeyDigest` computes a deterministic SHA-256 digest from JSON containing only `fileSha` and `dst`. `compressedSha` and `diffID` are deliberately excluded because they are the values resolved by the key rather than part of its lookup identity.
 
-`newRemoteCacheKey` creates the metadata payload:
+`newRemoteKey` creates the metadata payload:
 
 ```text
 fileSha
@@ -199,11 +199,11 @@ fileSha
 + diffID
 ```
 
-`encodeRemoteCacheKey` validates the metadata and serializes it to JSON.
+`encodeRemoteKey` validates the metadata and serializes it to JSON.
 
-`decodeRemoteCacheKey` decodes and validates pulled metadata.
+`decodeRemoteKey` decodes and validates pulled metadata.
 
-`validateRemoteCacheKeyMatch` verifies that pulled metadata still matches the requested `fileSha`, `dst`, and deterministic `keyDigest`.
+`validateRemoteKeyMatch` verifies that pulled metadata still matches the requested `fileSha`, `dst`, and deterministic `keyDigest`.
 
 ### `oci/image.go`
 
@@ -211,15 +211,15 @@ fileSha
 
 `newRemoteCacheFromContext` initializes the remote cache when registry and repository values are configured. If remote cache configuration is missing, remote caching remains disabled and the existing local-only behavior is preserved.
 
-`pullRemoteBlobToLocalCache` restores a remote blob into the local cache and verifies the downloaded bytes against the expected compressed SHA-256 digest. Failed or partial restores are removed.
+`restoreRemoteBlob` restores a remote blob into the local cache and verifies the downloaded bytes against the expected compressed SHA-256 digest. Failed or partial restores are removed.
 
-`pushRemoteBlobIfNeeded` checks the remote registry and publishes a local compressed blob only when it is not already available remotely.
+`ensureRemoteBlob` checks the remote registry and publishes a local compressed blob only when it is not already available remotely.
 
-`pullRemoteCacheKey` computes the semantic key digest, pulls the corresponding key metadata, decodes it, and validates that it matches the requested identity. A remote cache miss is returned as a normal miss; malformed metadata and registry errors are returned as failures.
+`lookupRemoteKey` computes the semantic key digest, pulls the corresponding key metadata, decodes it, and validates that it matches the requested identity. A remote cache miss is returned as a normal miss; malformed metadata and registry errors are returned as failures.
 
-`pushRemoteCacheKey` computes the semantic key digest, constructs and encodes the remote key metadata, and calls `PushKey`. If no remote cache is configured, the operation is a no-op. The helper is implemented and tested but is not yet called from `buildAllotment`.
+`publishRemoteKey` computes the semantic key digest, constructs and encodes the remote key metadata, and calls `PushKey`. If no remote cache is configured, the operation is a no-op. The helper is implemented and tested but is not yet called from `buildAllotment`.
 
-The local `upsertCacheKey` path now uses destination-aware upsert behavior instead of append-only metadata updates.
+The local `upsertLocalCacheKey` path now uses destination-aware upsert behavior instead of append-only metadata updates.
 
 ### `cmd/build.go`
 
@@ -315,7 +315,7 @@ Push tests verify:
 A focused orchestration command is:
 
 ```bash
-go test -count=1 ./oci -run 'Test(Push|Pull)RemoteCacheKey' -v
+go test -count=1 ./oci -run 'Test(Lookup|Publish)RemoteKey' -v
 ```
 
 ### Local key upsert tests

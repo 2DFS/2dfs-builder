@@ -907,13 +907,13 @@ func (c *containerImage) buildAllotment(a filesystem.AllotmentManifest, f filesy
 
 	// If no usable local cache entry exists, check the remote key cache to confirm if the blob is present in the remote cache
 	if compressedSha == "" {
-		remoteKey, found, err := c.pullRemoteCacheKey(fileSha, a.Dst.List)
+		remoteKey, found, err := c.lookupRemoteKey(fileSha, a.Dst.List)
 		if err != nil {
 			return err
 		}
 
 		if found {
-			available, err := c.pullRemoteBlobToLocalCache(remoteKey.CompressedSha)
+			available, err := c.restoreRemoteBlob(remoteKey.CompressedSha)
 			if err != nil {
 				return err
 			}
@@ -926,7 +926,7 @@ func (c *containerImage) buildAllotment(a filesystem.AllotmentManifest, f filesy
 					c.cacheLock.Lock()
 					defer c.cacheLock.Unlock()
 
-					return c.upsertCacheKey(fileSha, FileCacheKey{DiffID: diffID, CompressedSha: compressedSha}, a.Dst.List)
+					return c.upsertLocalCacheKey(fileSha, FileCacheKey{DiffID: diffID, CompressedSha: compressedSha}, a.Dst.List)
 				}()
 
 				if err != nil {
@@ -972,7 +972,7 @@ func (c *containerImage) buildAllotment(a filesystem.AllotmentManifest, f filesy
 
 		//add uncompressed allotment cache reference
 		c.cacheLock.Lock()
-		c.upsertCacheKey(fileSha, FileCacheKey{
+		c.upsertLocalCacheKey(fileSha, FileCacheKey{
 			DiffID:        diffID,
 			CompressedSha: compressedSha,
 		}, a.Dst.List)
@@ -997,13 +997,13 @@ func (c *containerImage) buildAllotment(a filesystem.AllotmentManifest, f filesy
 	}
 
 	// push blob to remote cache if needed
-	err = c.pushRemoteBlobIfNeeded(compressedSha)
+	err = c.ensureRemoteBlob(compressedSha)
 	if err != nil {
 		return err
 	}
 
 	// publish the remote key only after the referenced blob is available remotely
-	err = c.pushRemoteCacheKey(fileSha, a.Dst.List, compressedSha, diffID)
+	err = c.publishRemoteKey(fileSha, a.Dst.List, compressedSha, diffID)
 	if err != nil {
 		return err
 	}
@@ -1019,7 +1019,7 @@ func (c *containerImage) buildAllotment(a filesystem.AllotmentManifest, f filesy
 	return nil
 }
 
-func (c *containerImage) pushRemoteBlobIfNeeded(compressedSha string) error {
+func (c *containerImage) ensureRemoteBlob(compressedSha string) error {
 	if c.remoteCache == nil {
 		return nil
 	}
@@ -1049,14 +1049,14 @@ func (c *containerImage) pushRemoteBlobIfNeeded(compressedSha string) error {
 	return nil
 }
 
-func normalizeCompressedSHA256(compressedSha string) string {
+func normalizeSHA256Digest(compressedSha string) string {
 	normalized := strings.TrimSpace(compressedSha)
 	normalized = strings.TrimPrefix(normalized, "sha256:")
 	normalized = strings.TrimPrefix(normalized, "sha256-")
 	return strings.ToLower(normalized)
 }
 
-func (c *containerImage) pushRemoteCacheKey(fileSha string, dst []string, compressedSha string, diffID string) error {
+func (c *containerImage) publishRemoteKey(fileSha string, dst []string, compressedSha string, diffID string) error {
 	if c.remoteCache == nil {
 		return nil
 	}
@@ -1066,9 +1066,9 @@ func (c *containerImage) pushRemoteCacheKey(fileSha string, dst []string, compre
 		return fmt.Errorf("failed to calculate remote cache key digest: %w", err)
 	}
 
-	key := newRemoteCacheKey(fileSha, dst, compressedSha, diffID)
+	key := newRemoteKey(fileSha, dst, compressedSha, diffID)
 
-	reader, err := encodeRemoteCacheKey(key)
+	reader, err := encodeRemoteKey(key)
 	if err != nil {
 		return fmt.Errorf("failed to encode remote cache key %s: %w", keyDigest, err)
 	}
@@ -1082,8 +1082,8 @@ func (c *containerImage) pushRemoteCacheKey(fileSha string, dst []string, compre
 	return nil
 }
 
-func (c *containerImage) pullRemoteCacheKey(fileSha string, dst []string) (filesystem.RemoteCacheKey, bool, error) {
-	var emptyKey filesystem.RemoteCacheKey
+func (c *containerImage) lookupRemoteKey(fileSha string, dst []string) (filesystem.RemoteKey, bool, error) {
+	var emptyKey filesystem.RemoteKey
 
 	if c.remoteCache == nil {
 		return emptyKey, false, nil
@@ -1113,12 +1113,12 @@ func (c *containerImage) pullRemoteCacheKey(fileSha string, dst []string) (files
 	}
 	defer reader.Close()
 
-	key, err := decodeRemoteCacheKey(reader)
+	key, err := decodeRemoteKey(reader)
 	if err != nil {
 		return emptyKey, false, fmt.Errorf("failed to decode remote cache key %s: %w", keyDigest, err)
 	}
 
-	if err := validateRemoteCacheKeyMatch(key, fileSha, dst, keyDigest); err != nil {
+	if err := validateRemoteKeyMatch(key, fileSha, dst, keyDigest); err != nil {
 		return emptyKey, false, fmt.Errorf("remote cache key %s failed semantic validation: %w", keyDigest, err)
 	}
 
@@ -1126,7 +1126,7 @@ func (c *containerImage) pullRemoteCacheKey(fileSha string, dst []string) (files
 	return key, true, nil
 }
 
-func (c *containerImage) pullRemoteBlobToLocalCache(compressedSha string) (bool, error) {
+func (c *containerImage) restoreRemoteBlob(compressedSha string) (bool, error) {
 	if c.blobCache.Check(compressedSha) {
 		return true, nil
 	}
@@ -1172,7 +1172,7 @@ func (c *containerImage) pullRemoteBlobToLocalCache(compressedSha string) (bool,
 	_, err = io.CopyBuffer(io.MultiWriter(blobWriter, digestHash), reader, copyBuffer)
 
 	calculatedCompressedSha := fmt.Sprintf("%x", digestHash.Sum(nil))
-	expectedCompressedSha := normalizeCompressedSHA256(compressedSha)
+	expectedCompressedSha := normalizeSHA256Digest(compressedSha)
 
 	closeErr := blobWriter.Close()
 	writerClosed = true
@@ -1307,7 +1307,7 @@ func upsertFileCacheKey(cacheKeys CacheKeys, cacheFile FileCacheKey) CacheKeys {
 	return cacheKeys
 }
 
-func (c *containerImage) upsertCacheKey(fileSha string, cacheFile FileCacheKey, dst []string) error {
+func (c *containerImage) upsertLocalCacheKey(fileSha string, cacheFile FileCacheKey, dst []string) error {
 	//convert destination to string
 	destinationStr := strings.Join(dst[:], ",")
 	cacheFile.Destination = destinationStr

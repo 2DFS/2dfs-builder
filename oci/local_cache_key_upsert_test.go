@@ -59,7 +59,7 @@ func TestUpsertCacheKeyReplacesExistingDestination(
 	fileSha := "file-sha-test"
 	dst := []string{"/app/config.json"}
 
-	err := container.upsertCacheKey(
+	err := container.upsertLocalCacheKey(
 		fileSha,
 		FileCacheKey{
 			DiffID:        "old-diff-id",
@@ -69,12 +69,12 @@ func TestUpsertCacheKeyReplacesExistingDestination(
 	)
 	if err != nil {
 		t.Fatalf(
-			"first upsertCacheKey call returned error: %v",
+			"first upsertLocalCacheKey call returned error: %v",
 			err,
 		)
 	}
 
-	err = container.upsertCacheKey(
+	err = container.upsertLocalCacheKey(
 		fileSha,
 		FileCacheKey{
 			DiffID:        "new-diff-id",
@@ -84,7 +84,7 @@ func TestUpsertCacheKeyReplacesExistingDestination(
 	)
 	if err != nil {
 		t.Fatalf(
-			"second upsertCacheKey call returned error: %v",
+			"second upsertLocalCacheKey call returned error: %v",
 			err,
 		)
 	}
@@ -124,7 +124,7 @@ func TestUpsertCacheKeyAppendsNewDestination(
 
 	fileSha := "file-sha-test"
 
-	err := container.upsertCacheKey(
+	err := container.upsertLocalCacheKey(
 		fileSha,
 		FileCacheKey{
 			DiffID:        "first-diff-id",
@@ -134,12 +134,12 @@ func TestUpsertCacheKeyAppendsNewDestination(
 	)
 	if err != nil {
 		t.Fatalf(
-			"first upsertCacheKey call returned error: %v",
+			"first upsertLocalCacheKey call returned error: %v",
 			err,
 		)
 	}
 
-	err = container.upsertCacheKey(
+	err = container.upsertLocalCacheKey(
 		fileSha,
 		FileCacheKey{
 			DiffID:        "second-diff-id",
@@ -149,7 +149,7 @@ func TestUpsertCacheKeyAppendsNewDestination(
 	)
 	if err != nil {
 		t.Fatalf(
-			"second upsertCacheKey call returned error: %v",
+			"second upsertLocalCacheKey call returned error: %v",
 			err,
 		)
 	}

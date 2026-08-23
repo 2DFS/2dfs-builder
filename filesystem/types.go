@@ -53,7 +53,7 @@ type StringList struct {
 }
 
 // RemoteKeyCache represents the payload for the remote key cache entities.
-type RemoteCacheKey struct {
+type RemoteKey struct {
 	FileSha       string   `json:"fileSha"`
 	Dst           []string `json:"dst"`
 	CompressedSha string   `json:"compressedSha"`

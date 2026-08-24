@@ -2,13 +2,13 @@ package oci
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"errors"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
-	"context"
 	"strings"
 	"testing"
 
@@ -65,7 +65,6 @@ func testSHA256Hex(data []byte) string {
 	hash := sha256.Sum256(data)
 	return fmt.Sprintf("%x", hash[:])
 }
-
 
 func TestNewRemoteCacheFromContextDisabledWithoutValues(t *testing.T) {
 	ctx := context.Background()
@@ -304,7 +303,7 @@ func TestNewRemoteCacheFromContextRejectsInvalidRepositoryValue(t *testing.T) {
 	}
 }
 
-func TestPullRemoteBlobToLocalCacheRestoresMatchingDigest(t *testing.T) {
+func TestRestoreRemoteBlobRestoresMatchingDigest(t *testing.T) {
 	blob := []byte("valid remote blob content")
 	compressedSha := testSHA256Hex(blob)
 
@@ -340,7 +339,7 @@ func TestPullRemoteBlobToLocalCacheRestoresMatchingDigest(t *testing.T) {
 	}
 }
 
-func TestPullRemoteBlobToLocalCacheRejectsDigestMismatch(t *testing.T) {
+func TestRestoreRemoteBlobRejectsDigestMismatch(t *testing.T) {
 	expectedBlob := []byte("expected blob content")
 	pulledBlob := []byte("different remote blob content")
 	compressedSha := testSHA256Hex(expectedBlob)
@@ -376,7 +375,7 @@ func TestPullRemoteBlobToLocalCacheRejectsDigestMismatch(t *testing.T) {
 	}
 }
 
-func TestPullRemoteBlobToLocalCacheReturnsStreamError(t *testing.T) {
+func TestRestoreRemoteBlobReturnsStreamError(t *testing.T) {
 	remoteReadErr := errors.New("remote stream interrupted")
 	compressedSha := testSHA256Hex([]byte("expected blob content"))
 

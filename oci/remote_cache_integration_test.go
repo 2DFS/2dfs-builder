@@ -66,240 +66,128 @@ func testSHA256Hex(data []byte) string {
 	return fmt.Sprintf("%x", hash[:])
 }
 
-func TestNewRemoteCacheFromContextDisabledWithoutValues(t *testing.T) {
-	ctx := context.Background()
-
-	remoteCache, err := newRemoteCacheFromContext(ctx)
-
-	t.Logf("TEST: NewRemoteCacheFromContextDisabledWithoutValues")
-	t.Logf("INPUT:")
-	t.Logf("  remote cache registry: not configured")
-	t.Logf("  remote cache repository: not configured")
-	t.Logf("  remote cache insecure: not configured")
-	t.Logf("EXPECTED:")
-	t.Logf("  error: nil")
-	t.Logf("  remote cache: nil")
-	t.Logf("OUTPUT:")
-	t.Logf("  error: %v", err)
-	t.Logf("  remote cache is nil: %v", remoteCache == nil)
-
-	if err != nil {
-		t.Fatalf("newRemoteCacheFromContext() returned error: %v", err)
+func TestNewRemoteCacheFromContext(t *testing.T) {
+	tests := []struct {
+		name          string
+		registry      any
+		repository    any
+		insecure      any
+		setRegistry   bool
+		setRepository bool
+		setInsecure   bool
+		wantCache     bool
+		wantErr       string
+	}{
+		{
+			name: "disabled without values",
+		},
+		{
+			name:          "disabled with empty values",
+			registry:      "",
+			repository:    "",
+			insecure:      false,
+			setRegistry:   true,
+			setRepository: true,
+			setInsecure:   true,
+		},
+		{
+			name:        "disabled with only registry",
+			registry:    "localhost:5000",
+			setRegistry: true,
+		},
+		{
+			name:          "disabled with only repository",
+			repository:    "2dfs/cache",
+			setRepository: true,
+		},
+		{
+			name:          "enabled",
+			registry:      "localhost:5000",
+			repository:    "2dfs/cache",
+			insecure:      true,
+			setRegistry:   true,
+			setRepository: true,
+			setInsecure:   true,
+			wantCache:     true,
+		},
+		{
+			name:          "rejects invalid insecure value",
+			registry:      "localhost:5000",
+			repository:    "2dfs/cache",
+			insecure:      "true",
+			setRegistry:   true,
+			setRepository: true,
+			setInsecure:   true,
+			wantErr:       "invalid remote cache insecure value",
+		},
+		{
+			name:          "rejects invalid registry value",
+			registry:      123,
+			repository:    "2dfs/cache",
+			insecure:      false,
+			setRegistry:   true,
+			setRepository: true,
+			setInsecure:   true,
+			wantErr:       "invalid remote cache registry or repository value",
+		},
+		{
+			name:          "rejects invalid repository value",
+			registry:      "localhost:5000",
+			repository:    456,
+			insecure:      false,
+			setRegistry:   true,
+			setRepository: true,
+			setInsecure:   true,
+			wantErr:       "invalid remote cache registry or repository value",
+		},
 	}
 
-	if remoteCache != nil {
-		t.Fatal("expected remote cache to be nil when registry and repository are not configured")
-	}
-}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx := context.Background()
 
-func TestNewRemoteCacheFromContextDisabledWithEmptyValues(t *testing.T) {
-	ctx := context.Background()
-	ctx = context.WithValue(ctx, RemoteCacheRegistryContextKey, "")
-	ctx = context.WithValue(ctx, RemoteCacheRepositoryContextKey, "")
-	ctx = context.WithValue(ctx, RemoteCacheInsecureContextKey, false)
+			if tt.setRegistry {
+				ctx = context.WithValue(ctx, RemoteCacheRegistryContextKey, tt.registry)
+			}
 
-	remoteCache, err := newRemoteCacheFromContext(ctx)
+			if tt.setRepository {
+				ctx = context.WithValue(ctx, RemoteCacheRepositoryContextKey, tt.repository)
+			}
 
-	t.Logf("TEST: NewRemoteCacheFromContextDisabledWithEmptyValues")
-	t.Logf("INPUT:")
-	t.Logf("  remote cache registry: empty string")
-	t.Logf("  remote cache repository: empty string")
-	t.Logf("  remote cache insecure: false")
-	t.Logf("EXPECTED:")
-	t.Logf("  error: nil")
-	t.Logf("  remote cache: nil")
-	t.Logf("OUTPUT:")
-	t.Logf("  error: %v", err)
-	t.Logf("  remote cache is nil: %v", remoteCache == nil)
+			if tt.setInsecure {
+				ctx = context.WithValue(ctx, RemoteCacheInsecureContextKey, tt.insecure)
+			}
 
-	if err != nil {
-		t.Fatalf("newRemoteCacheFromContext() returned error: %v", err)
-	}
+			remoteCache, err := newRemoteCacheFromContext(ctx)
 
-	if remoteCache != nil {
-		t.Fatal("expected remote cache to be nil when registry and repository are empty")
-	}
-}
+			if tt.wantErr != "" {
+				if err == nil {
+					t.Fatalf("expected error containing %q, got nil", tt.wantErr)
+				}
 
-func TestNewRemoteCacheFromContextDisabledWithOnlyRegistry(t *testing.T) {
-	ctx := context.Background()
-	ctx = context.WithValue(ctx, RemoteCacheRegistryContextKey, "localhost:5000")
+				if remoteCache != nil {
+					t.Fatal("expected remote cache to be nil when configuration is invalid")
+				}
 
-	remoteCache, err := newRemoteCacheFromContext(ctx)
+				if !strings.Contains(err.Error(), tt.wantErr) {
+					t.Fatalf("expected error containing %q, got: %v", tt.wantErr, err)
+				}
 
-	t.Logf("TEST: NewRemoteCacheFromContextDisabledWithOnlyRegistry")
-	t.Logf("INPUT:")
-	t.Logf("  remote cache registry: localhost:5000")
-	t.Logf("  remote cache repository: not configured")
-	t.Logf("  remote cache insecure: not configured")
-	t.Logf("EXPECTED:")
-	t.Logf("  error: nil")
-	t.Logf("  remote cache: nil")
-	t.Logf("OUTPUT:")
-	t.Logf("  error: %v", err)
-	t.Logf("  remote cache is nil: %v", remoteCache == nil)
+				return
+			}
 
-	if err != nil {
-		t.Fatalf("newRemoteCacheFromContext() returned error: %v", err)
-	}
+			if err != nil {
+				t.Fatalf("newRemoteCacheFromContext() returned error: %v", err)
+			}
 
-	if remoteCache != nil {
-		t.Fatal("expected remote cache to be nil when repository is not configured")
-	}
-}
+			if tt.wantCache && remoteCache == nil {
+				t.Fatal("expected remote cache to be created")
+			}
 
-func TestNewRemoteCacheFromContextDisabledWithOnlyRepository(t *testing.T) {
-	ctx := context.Background()
-	ctx = context.WithValue(ctx, RemoteCacheRepositoryContextKey, "2dfs/cache")
-
-	remoteCache, err := newRemoteCacheFromContext(ctx)
-
-	t.Logf("TEST: NewRemoteCacheFromContextDisabledWithOnlyRepository")
-	t.Logf("INPUT:")
-	t.Logf("  remote cache registry: not configured")
-	t.Logf("  remote cache repository: 2dfs/cache")
-	t.Logf("  remote cache insecure: not configured")
-	t.Logf("EXPECTED:")
-	t.Logf("  error: nil")
-	t.Logf("  remote cache: nil")
-	t.Logf("OUTPUT:")
-	t.Logf("  error: %v", err)
-	t.Logf("  remote cache is nil: %v", remoteCache == nil)
-
-	if err != nil {
-		t.Fatalf("newRemoteCacheFromContext() returned error: %v", err)
-	}
-
-	if remoteCache != nil {
-		t.Fatal("expected remote cache to be nil when registry is not configured")
-	}
-}
-
-func TestNewRemoteCacheFromContextEnabled(t *testing.T) {
-	ctx := context.Background()
-	ctx = context.WithValue(ctx, RemoteCacheRegistryContextKey, "localhost:5000")
-	ctx = context.WithValue(ctx, RemoteCacheRepositoryContextKey, "2dfs/cache")
-	ctx = context.WithValue(ctx, RemoteCacheInsecureContextKey, true)
-
-	remoteCache, err := newRemoteCacheFromContext(ctx)
-
-	t.Logf("TEST: NewRemoteCacheFromContextEnabled")
-	t.Logf("INPUT:")
-	t.Logf("  remote cache registry: localhost:5000")
-	t.Logf("  remote cache repository: 2dfs/cache")
-	t.Logf("  remote cache insecure: true")
-	t.Logf("EXPECTED:")
-	t.Logf("  error: nil")
-	t.Logf("  remote cache: non-nil")
-	t.Logf("OUTPUT:")
-	t.Logf("  error: %v", err)
-	t.Logf("  remote cache is non-nil: %v", remoteCache != nil)
-
-	if err != nil {
-		t.Fatalf("newRemoteCacheFromContext() returned error: %v", err)
-	}
-
-	if remoteCache == nil {
-		t.Fatal("expected remote cache to be created when registry and repository are configured")
-	}
-}
-
-func TestNewRemoteCacheFromContextRejectsInvalidInsecureValue(t *testing.T) {
-	ctx := context.Background()
-	ctx = context.WithValue(ctx, RemoteCacheRegistryContextKey, "localhost:5000")
-	ctx = context.WithValue(ctx, RemoteCacheRepositoryContextKey, "2dfs/cache")
-	ctx = context.WithValue(ctx, RemoteCacheInsecureContextKey, "true")
-
-	remoteCache, err := newRemoteCacheFromContext(ctx)
-
-	t.Logf("TEST: NewRemoteCacheFromContextRejectsInvalidInsecureValue")
-	t.Logf("INPUT:")
-	t.Logf("  remote cache registry: localhost:5000")
-	t.Logf("  remote cache repository: 2dfs/cache")
-	t.Logf("  remote cache insecure: string(\"true\")")
-	t.Logf("EXPECTED:")
-	t.Logf("  error: contains \"invalid remote cache insecure value\"")
-	t.Logf("  remote cache: nil")
-	t.Logf("OUTPUT:")
-	t.Logf("  error: %v", err)
-	t.Logf("  remote cache is nil: %v", remoteCache == nil)
-
-	if err == nil {
-		t.Fatal("expected error for non-bool remote cache insecure value, got nil")
-	}
-
-	if remoteCache != nil {
-		t.Fatal("expected remote cache to be nil when insecure value is invalid")
-	}
-
-	if !strings.Contains(err.Error(), "invalid remote cache insecure value") {
-		t.Fatalf("expected invalid insecure value error, got: %v", err)
-	}
-}
-
-func TestNewRemoteCacheFromContextRejectsInvalidRegistryValue(t *testing.T) {
-	ctx := context.Background()
-	ctx = context.WithValue(ctx, RemoteCacheRegistryContextKey, 123)
-	ctx = context.WithValue(ctx, RemoteCacheRepositoryContextKey, "2dfs/cache")
-	ctx = context.WithValue(ctx, RemoteCacheInsecureContextKey, false)
-
-	remoteCache, err := newRemoteCacheFromContext(ctx)
-
-	t.Logf("TEST: NewRemoteCacheFromContextRejectsInvalidRegistryValue")
-	t.Logf("INPUT:")
-	t.Logf("  remote cache registry: int(123)")
-	t.Logf("  remote cache repository: 2dfs/cache")
-	t.Logf("  remote cache insecure: false")
-	t.Logf("EXPECTED:")
-	t.Logf("  error: contains \"invalid remote cache registry or repository value\"")
-	t.Logf("  remote cache: nil")
-	t.Logf("OUTPUT:")
-	t.Logf("  error: %v", err)
-	t.Logf("  remote cache is nil: %v", remoteCache == nil)
-
-	if err == nil {
-		t.Fatal("expected error for non-string remote cache registry value, got nil")
-	}
-
-	if remoteCache != nil {
-		t.Fatal("expected remote cache to be nil when registry value is invalid")
-	}
-
-	if !strings.Contains(err.Error(), "invalid remote cache registry or repository value") {
-		t.Fatalf("expected invalid registry/repository value error, got: %v", err)
-	}
-}
-
-func TestNewRemoteCacheFromContextRejectsInvalidRepositoryValue(t *testing.T) {
-	ctx := context.Background()
-	ctx = context.WithValue(ctx, RemoteCacheRegistryContextKey, "localhost:5000")
-	ctx = context.WithValue(ctx, RemoteCacheRepositoryContextKey, 456)
-	ctx = context.WithValue(ctx, RemoteCacheInsecureContextKey, false)
-
-	remoteCache, err := newRemoteCacheFromContext(ctx)
-
-	t.Logf("TEST: NewRemoteCacheFromContextRejectsInvalidRepositoryValue")
-	t.Logf("INPUT:")
-	t.Logf("  remote cache registry: localhost:5000")
-	t.Logf("  remote cache repository: int(456)")
-	t.Logf("  remote cache insecure: false")
-	t.Logf("EXPECTED:")
-	t.Logf("  error: contains \"invalid remote cache registry or repository value\"")
-	t.Logf("  remote cache: nil")
-	t.Logf("OUTPUT:")
-	t.Logf("  error: %v", err)
-	t.Logf("  remote cache is nil: %v", remoteCache == nil)
-
-	if err == nil {
-		t.Fatal("expected error for non-string remote cache repository value, got nil")
-	}
-
-	if remoteCache != nil {
-		t.Fatal("expected remote cache to be nil when repository value is invalid")
-	}
-
-	if !strings.Contains(err.Error(), "invalid remote cache registry or repository value") {
-		t.Fatalf("expected invalid registry/repository value error, got: %v", err)
+			if !tt.wantCache && remoteCache != nil {
+				t.Fatal("expected remote cache to be nil")
+			}
+		})
 	}
 }
 

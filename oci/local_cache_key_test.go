@@ -51,7 +51,7 @@ func readStoredCacheKeys(
 	return keys
 }
 
-func TestUpsertCacheKeyReplacesExistingDestination(
+func TestUpsertLocalCacheKeyReplacesExistingDestination(
 	t *testing.T,
 ) {
 	container := newCacheKeyUpsertTestContainer(t)
@@ -117,7 +117,7 @@ func TestUpsertCacheKeyReplacesExistingDestination(
 	}
 }
 
-func TestUpsertCacheKeyAppendsNewDestination(
+func TestUpsertLocalCacheKeyAppendsNewDestination(
 	t *testing.T,
 ) {
 	container := newCacheKeyUpsertTestContainer(t)

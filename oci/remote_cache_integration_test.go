@@ -18,7 +18,6 @@ import (
 type fakeRemoteCache struct {
 	blob   []byte
 	reader io.ReadCloser
-	err    error
 }
 
 func (f fakeRemoteCache) CheckBlob(compressedSha string) (bool, error) {
@@ -30,10 +29,6 @@ func (f fakeRemoteCache) PushBlob(compressedSha string, r io.Reader) error {
 }
 
 func (f fakeRemoteCache) PullBlob(compressedSha string) (io.ReadCloser, error) {
-	if f.err != nil {
-		return nil, f.err
-	}
-
 	if f.reader != nil {
 		return f.reader, nil
 	}

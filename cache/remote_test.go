@@ -111,7 +111,6 @@ func TestBlobTagPlainDigest(t *testing.T) {
 	}
 }
 
-// Take a closer look to verify tests
 func TestKeyTagNormalizesDigest(t *testing.T) {
 	tests := []struct {
 		name string
@@ -337,22 +336,22 @@ func TestNormalizeHexDigest(t *testing.T) {
 	}
 }
 
-func TestBlobReferenceBuildsExpectedReference(t *testing.T) {
+func TestReferenceBuildsExpectedBlobReference(t *testing.T) {
 	c := &remoteCache{
 		registryURL: "localhost:5000",
 		repository:  "2dfs/cache",
 		insecure:    true,
 	}
 
-	ref, err := c.blobReference("sha256:abc123")
+	ref, err := c.reference(blobTag("sha256:abc123"), "blob")
 	if err != nil {
-		t.Fatalf("blobReference() returned error: %v", err)
+		t.Fatalf("reference() returned error: %v", err)
 	}
 
 	wantName := "localhost:5000/2dfs/cache:blob-sha256-abc123"
 	wantIdentifier := "blob-sha256-abc123"
 
-	t.Logf("TEST: BlobReferenceBuildsExpectedReference")
+	t.Logf("TEST: ReferenceBuildsExpectedBlobReference")
 	t.Logf("registry URL: %s", c.registryURL)
 	t.Logf("repository: %s", c.repository)
 	t.Logf("input digest: %s", "sha256:abc123")
@@ -362,31 +361,30 @@ func TestBlobReferenceBuildsExpectedReference(t *testing.T) {
 	t.Logf("output identifier: %s", ref.Identifier())
 
 	if ref.Name() != wantName {
-		t.Fatalf("blobReference().Name() = %q, want %q", ref.Name(), wantName)
+		t.Fatalf("reference().Name() = %q, want %q", ref.Name(), wantName)
 	}
 
 	if ref.Identifier() != wantIdentifier {
-		t.Fatalf("blobReference().Identifier() = %q, want %q", ref.Identifier(), wantIdentifier)
+		t.Fatalf("reference().Identifier() = %q, want %q", ref.Identifier(), wantIdentifier)
 	}
 }
 
-// Take a closer look to verify tests
-func TestKeyReferenceBuildsExpectedReference(t *testing.T) {
+func TestReferenceBuildsExpectedKeyReference(t *testing.T) {
 	c := &remoteCache{
 		registryURL: "localhost:5000",
 		repository:  "2dfs/cache",
 		insecure:    true,
 	}
 
-	ref, err := c.keyReference("sha256:abc123")
+	ref, err := c.reference(keyTag("sha256:abc123"), "key")
 	if err != nil {
-		t.Fatalf("keyReference() returned error: %v", err)
+		t.Fatalf("reference() returned error: %v", err)
 	}
 
 	wantName := "localhost:5000/2dfs/cache:key-sha256-abc123"
 	wantIdentifier := "key-sha256-abc123"
 
-	t.Logf("TEST: KeyReferenceBuildsExpectedReference")
+	t.Logf("TEST: ReferenceBuildsExpectedKeyReference")
 	t.Logf("registry URL: %s", c.registryURL)
 	t.Logf("repository: %s", c.repository)
 	t.Logf("input digest: %s", "sha256:abc123")
@@ -396,29 +394,29 @@ func TestKeyReferenceBuildsExpectedReference(t *testing.T) {
 	t.Logf("output identifier: %s", ref.Identifier())
 
 	if ref.Name() != wantName {
-		t.Fatalf("keyReference().Name() = %q, want %q", ref.Name(), wantName)
+		t.Fatalf("reference().Name() = %q, want %q", ref.Name(), wantName)
 	}
 
 	if ref.Identifier() != wantIdentifier {
-		t.Fatalf("keyReference().Identifier() = %q, want %q", ref.Identifier(), wantIdentifier)
+		t.Fatalf("reference().Identifier() = %q, want %q", ref.Identifier(), wantIdentifier)
 	}
 }
 
-func TestBlobReferenceTrimsSlashes(t *testing.T) {
+func TestReferenceTrimsSlashes(t *testing.T) {
 	c := &remoteCache{
 		registryURL: "localhost:5000/",
 		repository:  "/2dfs/cache",
 		insecure:    true,
 	}
 
-	ref, err := c.blobReference("abc123")
+	ref, err := c.reference(blobTag("abc123"), "blob")
 	if err != nil {
-		t.Fatalf("blobReference() returned error: %v", err)
+		t.Fatalf("reference() returned error: %v", err)
 	}
 
 	wantName := "localhost:5000/2dfs/cache:blob-sha256-abc123"
 
-	t.Logf("TEST: BlobReferenceTrimsSlashes")
+	t.Logf("TEST: ReferenceTrimsSlashes")
 	t.Logf("registry URL: %s", c.registryURL)
 	t.Logf("repository: %s", c.repository)
 	t.Logf("input digest: %s", "abc123")
@@ -426,7 +424,7 @@ func TestBlobReferenceTrimsSlashes(t *testing.T) {
 	t.Logf("output reference name: %s", ref.Name())
 
 	if ref.Name() != wantName {
-		t.Fatalf("blobReference().Name() = %q, want %q", ref.Name(), wantName)
+		t.Fatalf("reference().Name() = %q, want %q", ref.Name(), wantName)
 	}
 }
 
@@ -604,7 +602,6 @@ func TestPullBlobReturnsOriginalCompressedBlobFromRegistry(t *testing.T) {
 	}
 }
 
-// Take a closer look to verify tests
 func TestPushKeyPullKeyReturnsOriginalMetadataFromRegistry(t *testing.T) {
 	keyMetadata := []byte(`{"fileSha":"file-sha-test","dst":["./Dockerfile","./requirements.txt"],"compressedSha":"compressed-sha-test","diffID":"diff-id-test"}`)
 	keyDigest := sha256Hex([]byte("file-sha-test|./Dockerfile|./requirements.txt"))
@@ -678,7 +675,6 @@ func TestPullBlobReturnsErrorWhenBlobIsMissing(t *testing.T) {
 	}
 }
 
-// Verification needed
 func TestPullKeyReturnsErrRemoteCacheMissWhenKeyIsMissing(t *testing.T) {
 	missingKeyDigest := "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 
@@ -710,7 +706,6 @@ func TestPullKeyReturnsErrRemoteCacheMissWhenKeyIsMissing(t *testing.T) {
 	}
 }
 
-// Verification needed
 func TestPushKeyStoresKeyUnderKeyTagInRegistry(t *testing.T) {
 	server := httptest.NewServer(registry.New())
 	defer server.Close()

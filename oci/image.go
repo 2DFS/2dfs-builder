@@ -424,7 +424,7 @@ func (c *containerImage) updateImageInfo(url string) {
 
 func (c *containerImage) AddField(manifest filesystem.TwoDFsManifest, targetUrl string) error {
 
-	fs, err := c.buildFiled(manifest)
+	fs, err := c.buildField(manifest)
 	c.field = fs
 	if err != nil {
 		return err
@@ -830,7 +830,7 @@ func (c *containerImage) GetExporter(args ...string) (FieldExporter, error) {
 	return c, nil
 }
 
-func (c *containerImage) buildFiled(manifest filesystem.TwoDFsManifest) (filesystem.Field, error) {
+func (c *containerImage) buildField(manifest filesystem.TwoDFsManifest) (filesystem.Field, error) {
 
 	tmpFolder := filepath.Join(os.TempDir(), fmt.Sprintf("%x-field", c.indexHash))
 	if _, err := os.Stat(tmpFolder); err == nil {
@@ -839,7 +839,7 @@ func (c *containerImage) buildFiled(manifest filesystem.TwoDFsManifest) (filesys
 	os.Mkdir(tmpFolder, 0755)
 	defer os.RemoveAll(tmpFolder)
 
-	//pupulate field with allotments
+	//populate field with allotments
 	f := filesystem.GetField()
 
 	success := make(chan bool, len(manifest.Allotments))

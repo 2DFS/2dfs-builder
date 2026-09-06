@@ -1,4 +1,5 @@
 # remote-cache-v1
+> **Status:** Historical MVP snapshot from June 15, 2026. This document is kept for design history and is superseded by `remote-cache-current.md`.
 
 ## Scope
 

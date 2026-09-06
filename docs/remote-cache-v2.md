@@ -1,4 +1,5 @@
 # remote-cache-v2
+> **Status:** Historical integration snapshot. The main content reflects the implementation state from August 17, 2026; naming was updated on August 23, 2026. This document is kept for design history and is superseded by `remote-cache-current.md`.
 
 ## Scope
 

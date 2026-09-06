@@ -992,7 +992,7 @@ func (c *containerImage) buildAllotment(a filesystem.AllotmentManifest, f filesy
 				c.blobCache.Del(compressedSha)
 				return err
 			}
-			log.Printf("Alltoment %d/%d %s [CREATED] \n", a.Row, a.Col, compressedSha)
+			log.Printf("Allotment %d/%d %s [CREATED] \n", a.Row, a.Col, compressedSha)
 		}
 	}
 

@@ -52,6 +52,14 @@ type StringList struct {
 	List []string
 }
 
+// RemoteKeyCache represents the payload for the remote key cache entities.
+type RemoteKey struct {
+	FileSha       string   `json:"fileSha"`
+	Dst           []string `json:"dst"`
+	CompressedSha string   `json:"compressedSha"`
+	DiffID        string   `json:"diffID"`
+}
+
 // UnmarshalJSON custom unmarshaler for StringList
 func (s *StringList) UnmarshalJSON(data []byte) error {
 	// Try to unmarshal as a string and convert it to list

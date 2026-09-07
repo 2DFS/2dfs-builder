@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -34,6 +35,12 @@ const (
 	BlobStoreContextKey contextKeyType = "blobStore"
 	// KeyStoreContextKey is the context key for the blob store
 	KeyStoreContextKey contextKeyType = "keyStore"
+	// RemoteCacheRegistryContextKey is the context key for the remote cache registry
+	RemoteCacheRegistryContextKey contextKeyType = "remoteCacheRegistry"
+	// RemoteCacheRepositoryContextKey is the context key for the remote cache repository
+	RemoteCacheRepositoryContextKey contextKeyType = "remoteCacheRepository"
+	// RemoteCacheInsecureContextKey is the context key for allowing insecure remote cache registry access
+	RemoteCacheInsecureContextKey contextKeyType = "remoteCacheInsecure"
 	// 2dfs media type
 	TwoDfsMediaType = "application/vnd.oci.image.layer.v1.2dfs.field"
 	// image name annotation
@@ -61,6 +68,7 @@ type containerImage struct {
 	indexCache     cache.CacheStore
 	blobCache      cache.CacheStore
 	keyDigestCache cache.CacheStore
+	remoteCache    cache.RemoteCache
 	field          filesystem.Field
 	manifests      []v1.Manifest
 	configs        []v1.Image
@@ -134,10 +142,17 @@ func NewImage(ctx context.Context, url string, forcepull bool, platforms []strin
 		return nil, err
 	}
 
+	// Create remote cache if it is flagged to be used
+	remoteCache, err := newRemoteCacheFromContext(ctx)
+	if err != nil {
+		return nil, err
+	}
+
 	img := &containerImage{
 		indexCache:     imgstore,
 		blobCache:      blobstore,
 		keyDigestCache: blobdigeststore,
+		remoteCache:    remoteCache,
 		manifests:      []v1.Manifest{},
 		configs:        []v1.Image{},
 		platforms:      platforms,
@@ -163,6 +178,37 @@ func NewImage(ctx context.Context, url string, forcepull bool, platforms []strin
 
 	return img, nil
 
+}
+
+func newRemoteCacheFromContext(ctx context.Context) (cache.RemoteCache, error) {
+	ctxRemoteCacheRegistry := ctx.Value(RemoteCacheRegistryContextKey)
+	ctxRemoteCacheRepository := ctx.Value(RemoteCacheRepositoryContextKey)
+	ctxRemoteCacheInsecure := ctx.Value(RemoteCacheInsecureContextKey)
+
+	remoteInsecure := false
+	if ctxRemoteCacheInsecure != nil {
+		insecureValue, okInsecure := ctxRemoteCacheInsecure.(bool)
+		if !okInsecure {
+			return nil, fmt.Errorf("invalid remote cache insecure value in context")
+		}
+		remoteInsecure = insecureValue
+	}
+
+	if ctxRemoteCacheRegistry == nil || ctxRemoteCacheRepository == nil {
+		return nil, nil
+	}
+
+	remoteRegistry, okRegistry := ctxRemoteCacheRegistry.(string)
+	remoteRepository, okRepository := ctxRemoteCacheRepository.(string)
+	if !okRegistry || !okRepository {
+		return nil, fmt.Errorf("invalid remote cache registry or repository value in context")
+	}
+
+	if remoteRegistry == "" || remoteRepository == "" {
+		return nil, nil
+	}
+
+	return cache.NewRemoteCache(remoteRegistry, remoteRepository, remoteInsecure), nil
 }
 
 func GetLocalImage(ctx context.Context, reference string) (Image, error) {
@@ -378,7 +424,7 @@ func (c *containerImage) updateImageInfo(url string) {
 
 func (c *containerImage) AddField(manifest filesystem.TwoDFsManifest, targetUrl string) error {
 
-	fs, err := c.buildFiled(manifest)
+	fs, err := c.buildField(manifest)
 	c.field = fs
 	if err != nil {
 		return err
@@ -784,7 +830,7 @@ func (c *containerImage) GetExporter(args ...string) (FieldExporter, error) {
 	return c, nil
 }
 
-func (c *containerImage) buildFiled(manifest filesystem.TwoDFsManifest) (filesystem.Field, error) {
+func (c *containerImage) buildField(manifest filesystem.TwoDFsManifest) (filesystem.Field, error) {
 
 	tmpFolder := filepath.Join(os.TempDir(), fmt.Sprintf("%x-field", c.indexHash))
 	if _, err := os.Stat(tmpFolder); err == nil {
@@ -793,7 +839,7 @@ func (c *containerImage) buildFiled(manifest filesystem.TwoDFsManifest) (filesys
 	os.Mkdir(tmpFolder, 0755)
 	defer os.RemoveAll(tmpFolder)
 
-	//pupulate field with allotments
+	//populate field with allotments
 	f := filesystem.GetField()
 
 	success := make(chan bool, len(manifest.Allotments))
@@ -851,6 +897,47 @@ func (c *containerImage) buildAllotment(a filesystem.AllotmentManifest, f filesy
 		return "", ""
 	}()
 
+	// Check if the local blob is usable and/or existent in the local cache where local key is pointing
+	if compressedSha != "" && !c.blobCache.Check(compressedSha) {
+		log.Printf("Blob %s referenced by local key is [MISSING] in local cache, trying remote cache\n", compressedSha)
+
+		compressedSha = ""
+		diffID = ""
+	}
+
+	// If no usable local cache entry exists, check the remote key cache to confirm if the blob is present in the remote cache
+	if compressedSha == "" {
+		remoteKey, found, err := c.lookupRemoteKey(fileSha, a.Dst.List)
+		if err != nil {
+			return err
+		}
+
+		if found {
+			available, err := c.restoreRemoteBlob(remoteKey.CompressedSha)
+			if err != nil {
+				return err
+			}
+
+			if available {
+				compressedSha = remoteKey.CompressedSha
+				diffID = remoteKey.DiffID
+
+				err = func() error {
+					c.cacheLock.Lock()
+					defer c.cacheLock.Unlock()
+
+					return c.upsertLocalCacheKey(fileSha, FileCacheKey{DiffID: diffID, CompressedSha: compressedSha}, a.Dst.List)
+				}()
+
+				if err != nil {
+					return err
+				}
+
+				log.Printf("File %s [RESTORED] from remote cache\n", a.Src)
+			}
+		}
+	}
+
 	// if no cache entry found, generate one
 	if compressedSha == "" {
 		log.Printf("File %s [COPY] \n", a.Src)
@@ -885,7 +972,7 @@ func (c *containerImage) buildAllotment(a filesystem.AllotmentManifest, f filesy
 
 		//add uncompressed allotment cache reference
 		c.cacheLock.Lock()
-		c.upsertCacheKey(fileSha, FileCacheKey{
+		c.upsertLocalCacheKey(fileSha, FileCacheKey{
 			DiffID:        diffID,
 			CompressedSha: compressedSha,
 		}, a.Dst.List)
@@ -905,8 +992,20 @@ func (c *containerImage) buildAllotment(a filesystem.AllotmentManifest, f filesy
 				c.blobCache.Del(compressedSha)
 				return err
 			}
-			log.Printf("Alltoment %d/%d %s [CREATED] \n", a.Row, a.Col, compressedSha)
+			log.Printf("Allotment %d/%d %s [CREATED] \n", a.Row, a.Col, compressedSha)
 		}
+	}
+
+	// push blob to remote cache if needed
+	err = c.ensureRemoteBlob(compressedSha)
+	if err != nil {
+		return err
+	}
+
+	// publish the remote key only after the referenced blob is available remotely
+	err = c.publishRemoteKey(fileSha, a.Dst.List, compressedSha, diffID)
+	if err != nil {
+		return err
 	}
 
 	// add allotments
@@ -918,6 +1017,190 @@ func (c *containerImage) buildAllotment(a filesystem.AllotmentManifest, f filesy
 	})
 
 	return nil
+}
+
+func (c *containerImage) ensureRemoteBlob(compressedSha string) error {
+	if c.remoteCache == nil {
+		return nil
+	}
+
+	exists, err := c.remoteCache.CheckBlob(compressedSha)
+	if err != nil {
+		return err
+	}
+
+	if exists {
+		log.Printf("Blob %s is already [CACHED] in remote registry\n", compressedSha)
+		return nil
+	}
+
+	reader, err := c.blobCache.Get(compressedSha)
+	if err != nil {
+		return fmt.Errorf("Failed to read local blob %s for remote cache push: %w", compressedSha, err)
+	}
+	defer reader.Close()
+
+	err = c.remoteCache.PushBlob(compressedSha, reader)
+	if err != nil {
+		return err
+	}
+
+	log.Printf("Blob %s [PUSHED] to remote cache\n", compressedSha)
+	return nil
+}
+
+func normalizeSHA256Digest(compressedSha string) string {
+	normalized := strings.TrimSpace(compressedSha)
+	normalized = strings.TrimPrefix(normalized, "sha256:")
+	normalized = strings.TrimPrefix(normalized, "sha256-")
+	return strings.ToLower(normalized)
+}
+
+func (c *containerImage) publishRemoteKey(fileSha string, dst []string, compressedSha string, diffID string) error {
+	if c.remoteCache == nil {
+		return nil
+	}
+
+	keyDigest, err := remoteKeyDigest(fileSha, dst)
+	if err != nil {
+		return fmt.Errorf("failed to calculate remote cache key digest: %w", err)
+	}
+
+	key := newRemoteKey(fileSha, dst, compressedSha, diffID)
+
+	reader, err := encodeRemoteKey(key)
+	if err != nil {
+		return fmt.Errorf("failed to encode remote cache key %s: %w", keyDigest, err)
+	}
+
+	if err := c.remoteCache.PushKey(keyDigest, reader); err != nil {
+		return fmt.Errorf("failed to push remote cache key %s: %w", keyDigest, err)
+	}
+
+	log.Printf("Remote key %s [PUSHED] to remote cache\n", keyDigest)
+
+	return nil
+}
+
+func (c *containerImage) lookupRemoteKey(fileSha string, dst []string) (filesystem.RemoteKey, bool, error) {
+	var emptyKey filesystem.RemoteKey
+
+	if c.remoteCache == nil {
+		return emptyKey, false, nil
+	}
+
+	keyDigest, err := remoteKeyDigest(fileSha, dst)
+	if err != nil {
+		return emptyKey, false, fmt.Errorf("failed to calculate remote cache key digest: %w", err)
+	}
+
+	reader, err := c.remoteCache.PullKey(keyDigest)
+	if err != nil {
+		if reader != nil {
+			_ = reader.Close()
+		}
+
+		if errors.Is(err, cache.ErrRemoteCacheMiss) {
+			log.Printf("Remote key %s [MISS] in remote cache\n", keyDigest)
+			return emptyKey, false, nil
+		}
+
+		return emptyKey, false, fmt.Errorf("failed to pull remote cache key %s: %w", keyDigest, err)
+	}
+
+	if reader == nil {
+		return emptyKey, false, fmt.Errorf("remote cache returned a nil reader for key %s", keyDigest)
+	}
+	defer reader.Close()
+
+	key, err := decodeRemoteKey(reader)
+	if err != nil {
+		return emptyKey, false, fmt.Errorf("failed to decode remote cache key %s: %w", keyDigest, err)
+	}
+
+	if err := validateRemoteKeyMatch(key, fileSha, dst, keyDigest); err != nil {
+		return emptyKey, false, fmt.Errorf("remote cache key %s failed semantic validation: %w", keyDigest, err)
+	}
+
+	log.Printf("Remote key %s [HIT] in remote cache\n", keyDigest)
+	return key, true, nil
+}
+
+func (c *containerImage) restoreRemoteBlob(compressedSha string) (bool, error) {
+	if c.blobCache.Check(compressedSha) {
+		return true, nil
+	}
+
+	if c.remoteCache == nil {
+		log.Printf("Blob %s [MISSING] in local cache and no remote cache configured\n", compressedSha)
+		return false, nil
+	}
+
+	log.Printf("Blob %s [MISSING] in local cache, trying remote cache restore\n", compressedSha)
+
+	reader, err := c.remoteCache.PullBlob(compressedSha)
+	if err != nil {
+		if reader != nil {
+			_ = reader.Close()
+		}
+
+		if errors.Is(err, cache.ErrRemoteCacheMiss) {
+			log.Printf("Blob %s remote cache restore [MISS]: %v\n", compressedSha, err)
+			return false, nil
+		}
+
+		return false, fmt.Errorf("Failed to pull blob %s from remote cache: %w", compressedSha, err)
+	}
+	defer reader.Close()
+
+	blobWriter, err := c.blobCache.Add(compressedSha)
+	if err != nil {
+		return false, fmt.Errorf("Failed to create local blob cache entry for remote restore %s: %w", compressedSha, err)
+	}
+
+	writerClosed := false
+	defer func() {
+		if !writerClosed {
+			_ = blobWriter.Close()
+			c.blobCache.Del(compressedSha)
+		}
+	}()
+
+	digestHash := sha256.New()
+	copyBuffer := make([]byte, 1024*1024)
+
+	_, err = io.CopyBuffer(io.MultiWriter(blobWriter, digestHash), reader, copyBuffer)
+
+	calculatedCompressedSha := fmt.Sprintf("%x", digestHash.Sum(nil))
+	expectedCompressedSha := normalizeSHA256Digest(compressedSha)
+
+	closeErr := blobWriter.Close()
+	writerClosed = true
+
+	if err != nil {
+		c.blobCache.Del(compressedSha)
+
+		return false, fmt.Errorf("Failed to restore blob %s from remote cache: %w", compressedSha, err)
+	}
+
+	if closeErr != nil {
+		c.blobCache.Del(compressedSha)
+		log.Printf("Blob %s remote cache restore [FAILED]: %v\n", compressedSha, closeErr)
+		return false, fmt.Errorf("Failed to close local blob cache entry after remote restore: %s: %w", compressedSha, closeErr)
+	}
+
+	if !strings.EqualFold(calculatedCompressedSha, expectedCompressedSha) {
+		c.blobCache.Del(compressedSha)
+		return false, fmt.Errorf("Pulled blob digest mismatch: expected sha256:%s, got sha256:%s", expectedCompressedSha, calculatedCompressedSha)
+	}
+
+	if !c.blobCache.Check(compressedSha) {
+		c.blobCache.Del(compressedSha)
+		return false, fmt.Errorf("Restored blob %s failed local integrity check", compressedSha)
+	}
+
+	log.Printf("Blob %s [RESTORED] from remote cache\n", compressedSha)
+	return true, nil
 }
 
 func createFileWithDirs(p string) (*os.File, error) {
@@ -1000,7 +1283,31 @@ func (c *containerImage) filterByPlatform(index v1.Index) v1.Index {
 	return index
 }
 
-func (c *containerImage) upsertCacheKey(fileSha string, cacheFile FileCacheKey, dst []string) error {
+func upsertFileCacheKey(cacheKeys CacheKeys, cacheFile FileCacheKey) CacheKeys {
+	updatedKeys := make([]FileCacheKey, 0, len(cacheKeys.Keys)+1)
+	replaced := false
+
+	for _, existingKey := range cacheKeys.Keys {
+		if existingKey.Destination != cacheFile.Destination {
+			updatedKeys = append(updatedKeys, existingKey)
+			continue
+		}
+
+		if !replaced {
+			updatedKeys = append(updatedKeys, cacheFile)
+			replaced = true
+		}
+	}
+
+	if !replaced {
+		updatedKeys = append(updatedKeys, cacheFile)
+	}
+
+	cacheKeys.Keys = updatedKeys
+	return cacheKeys
+}
+
+func (c *containerImage) upsertLocalCacheKey(fileSha string, cacheFile FileCacheKey, dst []string) error {
 	//convert destination to string
 	destinationStr := strings.Join(dst[:], ",")
 	cacheFile.Destination = destinationStr
@@ -1009,6 +1316,7 @@ func (c *containerImage) upsertCacheKey(fileSha string, cacheFile FileCacheKey, 
 	cachekey := CacheKeys{
 		Keys: []FileCacheKey{},
 	}
+
 	// if cache entry found, read it so we can append the new key
 	if err == nil {
 		cachekey, err = ParseCacheKey(keyDigestReader)
@@ -1020,7 +1328,7 @@ func (c *containerImage) upsertCacheKey(fileSha string, cacheFile FileCacheKey, 
 		c.keyDigestCache.Del(fileSha)
 	}
 
-	cachekey.Keys = append(cachekey.Keys, cacheFile)
+	cachekey = upsertFileCacheKey(cachekey, cacheFile)
 	cachewriter, err := c.keyDigestCache.Add(fileSha)
 	if err != nil {
 		return err
